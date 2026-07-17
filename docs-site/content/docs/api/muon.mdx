@@ -3,7 +3,7 @@ title: tinyllm.muon
 description: zeropower_via_newtonschulz5, the Muon optimizer, and build_optimizers — exact signatures and the three-bucket parameter split
 ---
 
-81 lines: `tinyllm/muon.py`. An optimizer that orthogonalizes each 2-D weight's
+91 lines: `tinyllm/muon.py`. An optimizer that orthogonalizes each 2-D weight's
 momentum-smoothed gradient with a quintic Newton-Schulz iteration, plus the
 function that decides which parameters get it. [Muon](/docs/training/muon) derives
 the method; this page is the signature reference.
@@ -95,6 +95,19 @@ Per parameter: update the momentum EMA → optionally apply Nesterov → orthogo
 
 Note `step` does **not** zero gradients — the training loop calls
 `opt.zero_grad(set_to_none=True)` explicitly.
+
+<Callout type="warn">
+  **The Nesterov branch mutates `p.grad` in place** (`g = g.lerp_(buf,
+  momentum)`, where `g is p.grad`). Source has a comment on this; it is safe
+  here for three reasons specific to this training loop: gradient clipping
+  runs before `step()`, so nothing reads the pre-mutation gradient afterward;
+  Muon and AdamW own disjoint parameter sets, so no other optimizer touches
+  this `p.grad`; and `zero_grad(set_to_none=True)` follows immediately,
+  discarding the buffer rather than reusing it. **It would break under DDP's
+  `gradient_as_bucket_view=True`**, which aliases `p.grad` to a communication
+  bucket — mutating it in place would corrupt the bucket instead of just the
+  local gradient. `tinyllm`'s DDP wrapper does not set that flag.
+</Callout>
 
 ## `build_optimizers`
 

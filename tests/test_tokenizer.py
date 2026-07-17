@@ -89,9 +89,14 @@ def test_load_rejects_tampered_pattern(tok, tmp_path):
 
 def test_min_word_freq_filters_rare_words():
     texts = ["common common common rare"]
-    t = BPETokenizer.train(texts, vocab_size=300, min_word_freq=2)
-    # 'rare' appeared once -> excluded from training, but still encodable at byte level
-    assert t.decode(t.encode("rare")) == "rare"
+    t1 = BPETokenizer.train(texts, vocab_size=300, min_word_freq=1)
+    t2 = BPETokenizer.train(texts, vocab_size=300, min_word_freq=2)
+    # 'rare' appeared once -> excluded from training at min_word_freq=2, so it
+    # merges differently (or not at all) than when it was eligible at freq=1.
+    # Still byte-level roundtrips correctly either way.
+    assert t1.encode("rare") != t2.encode("rare")
+    assert t1.decode(t1.encode("rare")) == "rare"
+    assert t2.decode(t2.encode("rare")) == "rare"
 
 
 def test_fast_export_parity(tok):

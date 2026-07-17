@@ -48,6 +48,16 @@ class Muon(torch.optim.Optimizer):
                     state["momentum_buffer"] = torch.zeros_like(g)
                 buf = state["momentum_buffer"]
                 buf.lerp_(g, 1 - group["momentum"])
+                # `g.lerp_` mutates `p.grad` in place (nesterov branch only; the
+                # else branch reassigns `g` to `buf` without touching `p.grad`).
+                # Safe here because: grad clipping already ran before `step()`,
+                # so there's no later reader of the pre-mutation gradient; Muon
+                # and AdamW own disjoint parameter sets, so no other optimizer
+                # reads this `p.grad`; and `zero_grad(set_to_none=True)` follows
+                # this step, discarding the buffer rather than reusing it. This
+                # would break under DDP's `gradient_as_bucket_view=True`, which
+                # aliases `p.grad` to a reduction bucket — mutating it in place
+                # would corrupt the bucket instead of just the local gradient.
                 g = g.lerp_(buf, group["momentum"]) if group["nesterov"] else buf
                 g = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
                 scale = max(1.0, p.size(0) / p.size(1)) ** 0.5

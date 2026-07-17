@@ -125,8 +125,9 @@ def train(
 
 **Returns:** a new `BPETokenizer` with `{ENDOFTEXT: 256 + len(merges)}`.
 
-**Raises:** `AssertionError` if `vocab_size <= 257` ("need room for 256 bytes +
-`<|endoftext|>`").
+**Raises:** `AssertionError` if `vocab_size < 257` ("need room for 256 bytes +
+`<|endoftext|>`"). `vocab_size == 257` is legal — 256 byte tokens plus
+`<|endoftext|>` and zero merges.
 
 Two properties worth relying on:
 
