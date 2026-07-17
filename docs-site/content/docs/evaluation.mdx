@@ -66,11 +66,11 @@ regardless of where the cadence landed.
 
 | Preset | `val_batches` | `micro_batch_size` | `seq_len` | Tokens per eval |
 |---|---|---|---|---|
-| `d26` | 20 | 16 | 2048 | **655,360** |
+| `d26` | 20 | 8 | 2048 | **327,680** |
 | `smoke` | 8 | 8 | 512 | **32,768** |
 
 Note what this is **not**: it is not a full pass over the validation split.
-`d26`'s val split is ~10M tokens and each eval reads 655k of them, as 20 random
+`d26`'s val split is ~10M tokens and each eval reads 328k of them, as 20 random
 crops drawn with replacement. It is a fixed *sample*, not an exhaustive sweep —
 cheap enough to run 76 times over a 19,073-step run without denting throughput,
 and because the sample is frozen by the seed, its bias is a constant offset that

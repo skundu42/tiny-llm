@@ -34,12 +34,12 @@ assert tc.batch_tokens % (world * micro_tokens) == 0, (
 grad_accum = tc.batch_tokens // (world * micro_tokens)
 ```
 
-Plug in the `d26` numbers (`micro_batch_size = 16`, `seq_len = 2048`):
+Plug in the `d26` numbers (`micro_batch_size = 8`, `seq_len = 2048`):
 
-- **Single GPU** (`world = 1`): `grad_accum = 524288 / (1 × 16 × 2048) = 16`.
-  Sixteen micro-steps are accumulated before each optimizer step.
-- **Eight GPUs** (`world = 8`): `grad_accum = 524288 / (8 × 16 × 2048) = 2`.
-  Each rank does two micro-steps; the eight ranks together still cover the same
+- **Single GPU** (`world = 1`): `grad_accum = 524288 / (1 × 8 × 2048) = 32`.
+  Thirty-two micro-steps are accumulated before each optimizer step.
+- **Eight GPUs** (`world = 8`): `grad_accum = 524288 / (8 × 8 × 2048) = 4`.
+  Each rank does four micro-steps; the eight ranks together still cover the same
   524,288 tokens.
 
 The point: `batch_tokens` is the invariant, and `grad_accum` flexes to absorb

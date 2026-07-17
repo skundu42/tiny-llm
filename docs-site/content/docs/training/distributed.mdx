@@ -89,7 +89,7 @@ the launcher only sets environment variables.
 
 **Single GPU (or CPU, or Apple MPS):** run the module directly. No `RANK` in the
 environment, so `ddp` is `False`, `world = 1`, and `_pick_device` picks CUDA, MPS,
-or CPU. For `d26` this means `grad_accum = 16` — the whole 524,288-token batch is
+or CPU. For `d26` this means `grad_accum = 32` — the whole 524,288-token batch is
 accumulated on one device.
 
 ```bash
@@ -103,7 +103,7 @@ per GPU and populates `RANK`, `WORLD_SIZE`, and `LOCAL_RANK`:
 torchrun --standalone --nproc_per_node=8 -m tinyllm.train --config d26
 ```
 
-Now `world = 8` and `grad_accum` drops to `2`, but `batch_tokens` is still
+Now `world = 8` and `grad_accum` drops to `4`, but `batch_tokens` is still
 524,288 — the [grad-accumulation identity](/docs/training) holds the
 effective batch constant while the eight ranks share the work. Multi-node runs
 are the same picture with `torchrun`'s rendezvous arguments across hosts. Because

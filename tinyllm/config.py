@@ -29,7 +29,7 @@ class TrainConfig:
     data_dir: str = "data/fineweb-edu"
     # batch: tokens per optimizer step, summed across all ranks
     batch_tokens: int = 524_288
-    micro_batch_size: int = 16          # sequences per micro-step per rank
+    micro_batch_size: int = 8           # sequences per micro-step per rank
     # schedule
     total_steps: int = 19_073           # ~10B tokens / 524288
     warmup_steps: int = 250

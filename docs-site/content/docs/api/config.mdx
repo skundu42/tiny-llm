@@ -86,7 +86,7 @@ class TrainConfig:
     data_dir: str = "data/fineweb-edu"
     # batch: tokens per optimizer step, summed across all ranks
     batch_tokens: int = 524_288
-    micro_batch_size: int = 16          # sequences per micro-step per rank
+    micro_batch_size: int = 8           # sequences per micro-step per rank
     # schedule
     total_steps: int = 19_073           # ~10B tokens / 524288
     warmup_steps: int = 250
@@ -121,7 +121,7 @@ Everything about the run. No `__post_init__` — validation happens in
 |---|---|---|
 | `data_dir` | `"data/fineweb-edu"` | Directory holding `index.json` and the `.bin` shards. |
 | `batch_tokens` | `524_288` | **Tokens per optimizer step, summed across all ranks.** The invariant. |
-| `micro_batch_size` | `16` | Sequences per micro-step **per rank** — the memory knob. |
+| `micro_batch_size` | `8` | Sequences per micro-step **per rank** — the memory knob. |
 
 `grad_accum` is **not a field**. It is derived in `run` as `batch_tokens / (world ×
 micro_batch_size × seq_len)`, so the effective batch stays fixed as you change GPU
@@ -165,7 +165,7 @@ multiplies each by the same `lr_scale(step)`.
 | `out_dir` | `"out/d26"` | Holds `log.csv` and `ckpt_last.pt`. |
 | `log_every` | `10` | Steps between train-loss log lines. |
 | `val_every` | `250` | Steps between validations — fires on `(step + 1) % val_every == 0`. |
-| `val_batches` | `20` | Micro-batches per validation. `20 × 16 × 2048 = 655,360` tokens. |
+| `val_batches` | `20` | Micro-batches per validation. `20 × 8 × 2048 = 327,680` tokens. |
 | `ckpt_every` | `1000` | Steps between checkpoint writes. |
 | `sample_every` | `1000` | Steps between sample generations — **only if `--tokenizer` was passed**. |
 | `wandb_project` | `""` | W&B project. **Empty disables W&B entirely.** |
@@ -214,7 +214,7 @@ TRAIN_PRESETS: dict[str, TrainConfig] = {
 |---|---|---|
 | `data_dir` | `data/fineweb-edu` | `data/smoke` |
 | `batch_tokens` | 524,288 | 16,384 |
-| `micro_batch_size` | 16 | 8 |
+| `micro_batch_size` | 8 | 8 |
 | `total_steps` | 19,073 | 600 |
 | `warmup_steps` | 250 | 20 |
 | `compile` | `True` | `False` |
