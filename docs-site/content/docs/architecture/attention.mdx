@@ -40,11 +40,10 @@ def forward(self, x, cos, sin, cache: "KVCache | None" = None) -> torch.Tensor:
             "chunked prefill unsupported: q_len > 1 requires an empty cache"
         )
         k, v = cache.update(self.layer_idx, k, v)
-    rep = self.n_head // self.n_kv_head
-    if rep > 1:
-        k = k.repeat_interleave(rep, dim=1)
-        v = v.repeat_interleave(rep, dim=1)
-    y = F.scaled_dot_product_attention(q, k, v, is_causal=q.size(2) == k.size(2))
+    y = F.scaled_dot_product_attention(
+        q, k, v, is_causal=q.size(2) == k.size(2),
+        enable_gqa=self.n_head != self.n_kv_head,
+    )
     y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.head_dim)
     return self.wo(y)
 ```
@@ -55,9 +54,9 @@ def forward(self, x, cos, sin, cache: "KVCache | None" = None) -> torch.Tensor:
    4.
 2. **QK-norm**, then **[RoPE](/docs/architecture/rope)**, on `q` and `k` only.
 3. **Cache update**, if decoding — returns the full history of keys/values.
-4. **Repeat KV heads** to match the 20 query heads.
-5. **SDPA** with causal masking.
-6. **Merge heads and project out.** `(B, H, T, 64) → (B, T, 1280) → wo → (B, T,
+4. **SDPA with `enable_gqa=True`** groups the 4 KV heads to the 20 query heads
+   internally, with causal masking.
+5. **Merge heads and project out.** `(B, H, T, 64) → (B, T, 1280) → wo → (B, T,
    1280)`.
 
 ## GQA: why 4 KV heads
@@ -68,24 +67,30 @@ single K/V. **Grouped-query attention** interpolates — `n_kv_head` groups, eac
 shared by `n_head / n_kv_head` query heads. Here `20 / 4 = 5`: query heads 0-4
 share KV head 0, heads 5-9 share KV head 1, and so on.
 
-The sharing is done by materializing the repeats:
+The grouping is delegated to SDPA itself via `enable_gqa=True`:
 
 ```python
-rep = self.n_head // self.n_kv_head
-if rep > 1:
-    k = k.repeat_interleave(rep, dim=1)
-    v = v.repeat_interleave(rep, dim=1)
+y = F.scaled_dot_product_attention(
+    q, k, v, is_causal=q.size(2) == k.size(2),
+    enable_gqa=self.n_head != self.n_kv_head,
+)
 ```
 
-`repeat_interleave(5, dim=1)` turns `(B, 4, T, 64)` into `(B, 20, T, 64)` with
-each KV head duplicated five times **consecutively** — `[0,0,0,0,0,1,1,1,1,1,...]`
-— which is what lines up group `i` with query heads `5i .. 5i+4`. (Interleaving
-matters: `repeat` would give `[0,1,2,3,0,1,2,3,...]` and mismatch the groups.)
-The `if rep > 1` guard skips the op entirely when `n_kv_head == n_head`.
+Conceptually this is the same repeat as before — internally SDPA does
+`key.repeat_interleave(n_head // n_kv_head, dim=-3)` (and the same for `v`),
+lining up each KV head with the `n_head / n_kv_head` query heads that share it,
+consecutively: group `i` covers query heads `5i .. 5i+4` for `d26`'s 5:1 ratio.
+The difference from doing the `repeat_interleave` ourselves is that SDPA's
+fused kernel performs the grouping internally rather than materializing the
+expanded `(B, 20, T, 64)` tensors first — `q`, `k`, and `v` reach the kernel at
+their native 4-head width, so the 5×-larger K/V that GQA exists to avoid is
+never allocated, even transiently. At large batch sizes this saves real memory:
+the expanded copies alone would be several GiB across `d26`'s 26 layers.
+`enable_gqa` is only set `True` when `n_head != n_kv_head`, mirroring the old
+`if rep > 1` guard — when the head counts are equal there is nothing to group,
+and passing `False` keeps that case an exact no-op.
 
-This expansion is a `view`-like broadcast conceptually, and the real cost was
-already paid — or rather, *not* paid — upstream: the projections and the cache
-only ever hold 4 heads.
+The projections and the cache only ever hold 4 heads regardless.
 
 ### The KV cache, and why 4 KV heads
 

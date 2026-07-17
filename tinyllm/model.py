@@ -96,11 +96,10 @@ class Attention(nn.Module):
                 "chunked prefill unsupported: q_len > 1 requires an empty cache"
             )
             k, v = cache.update(self.layer_idx, k, v)
-        rep = self.n_head // self.n_kv_head
-        if rep > 1:
-            k = k.repeat_interleave(rep, dim=1)
-            v = v.repeat_interleave(rep, dim=1)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=q.size(2) == k.size(2))
+        y = F.scaled_dot_product_attention(
+            q, k, v, is_causal=q.size(2) == k.size(2),
+            enable_gqa=self.n_head != self.n_kv_head,
+        )
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.head_dim)
         return self.wo(y)
 

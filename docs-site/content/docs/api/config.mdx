@@ -48,10 +48,10 @@ def __post_init__(self) -> None:
 **Returns:** `None`. Raises `AssertionError` on an inconsistent config.
 
 Both invariants are structural. `d_model % n_head == 0` makes `head_dim` an
-integer; `n_head % n_kv_head == 0` makes the GQA groups equal-sized, so
-`repeat_interleave` lines each KV head up with exactly `n_head // n_kv_head` query
-heads. Dataclasses call this automatically on construction — an invalid config
-fails at the line that creates it, not 200 lines later inside a matmul.
+integer; `n_head % n_kv_head == 0` makes the GQA groups equal-sized, so SDPA's
+`enable_gqa` grouping lines each KV head up with exactly `n_head // n_kv_head`
+query heads. Dataclasses call this automatically on construction — an invalid
+config fails at the line that creates it, not 200 lines later inside a matmul.
 
 ### `head_dim`
 
