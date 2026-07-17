@@ -45,7 +45,7 @@ Model: 13,111,296 params (6 layers, d_model 256, 4 heads, 2 KV heads, ctx 512), 
 
 - **Initial loss 10.4399 ≈ ln(32768) = 10.3972** — confirms correct uniform initialization.
 - Final val loss **5.50**, comfortably below the plan's ≤6.0 acceptance gate.
-- Val tracks train throughout (no overfitting at ~1 epoch over 58M tokens).
+- Val tracks train throughout, so no overfitting — unsurprising, since 600 steps × 16,384 tokens/step = 9,830,400 tokens is only **0.169 epochs** over the 57,998,487-token train split (a full epoch would need ~3,540 steps).
 - Throughput: **~11,000–13,400 tok/s** on MPS; 600 steps ≈ 15 min wall clock.
 - LR schedule behaved as designed: warmup to 1.0 by step 20, stable plateau, decay engaged from step ~480 (lr× 0.833 → 0.008 at step 599).
 
