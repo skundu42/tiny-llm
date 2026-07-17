@@ -6,6 +6,7 @@ tied embeddings, no biases anywhere.
 from __future__ import annotations
 
 import math
+import operator
 
 import torch
 import torch.nn as nn
@@ -92,9 +93,10 @@ class Attention(nn.Module):
         q, k = self.q_norm(q), self.k_norm(k)
         q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
         if cache is not None:
-            assert T == 1 or cache.pos == 0, (
-                "chunked prefill unsupported: q_len > 1 requires an empty cache"
-            )
+            if T != 1 and cache.pos != 0:
+                raise ValueError(
+                    "chunked prefill unsupported: q_len > 1 requires an empty cache"
+                )
             k, v = cache.update(self.layer_idx, k, v)
         y = F.scaled_dot_product_attention(
             q, k, v, is_causal=q.size(2) == k.size(2),
@@ -183,35 +185,92 @@ class TinyLLM(nn.Module):
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, eos_id=None):
-        self.eval()
+        if idx.ndim != 2 or idx.size(0) == 0 or idx.size(1) == 0:
+            raise ValueError("idx must have shape (batch, sequence) with both dimensions non-zero")
+        if idx.dtype not in {torch.int32, torch.int64}:
+            raise ValueError(f"idx must contain integer token ids, got {idx.dtype}")
+        if (idx < 0).any() or (idx >= self.cfg.vocab_size).any():
+            raise ValueError(f"idx token ids must be in [0, {self.cfg.vocab_size})")
+        try:
+            max_new_tokens = operator.index(max_new_tokens)
+        except TypeError as exc:
+            raise ValueError("max_new_tokens must be an integer") from exc
+        if max_new_tokens < 0:
+            raise ValueError("max_new_tokens must be non-negative")
+        try:
+            valid_temperature = math.isfinite(temperature) and temperature >= 0
+        except TypeError as exc:
+            raise ValueError("temperature must be a finite number") from exc
+        if not valid_temperature:
+            raise ValueError("temperature must be finite and non-negative")
+        if top_k is not None:
+            try:
+                top_k = operator.index(top_k)
+            except TypeError as exc:
+                raise ValueError("top_k must be an integer") from exc
+            if top_k <= 0:
+                raise ValueError("top_k must be positive when provided")
+        if top_p is not None:
+            try:
+                valid_top_p = math.isfinite(top_p) and 0 < top_p <= 1
+            except TypeError as exc:
+                raise ValueError("top_p must be a finite number") from exc
+            if not valid_top_p:
+                raise ValueError("top_p must be in (0, 1]")
+        if eos_id is not None:
+            try:
+                eos_id = operator.index(eos_id)
+            except TypeError as exc:
+                raise ValueError("eos_id must be an integer") from exc
+            if not 0 <= eos_id < self.cfg.vocab_size:
+                raise ValueError(f"eos_id must be in [0, {self.cfg.vocab_size})")
+
         B, T = idx.shape
         total = T + max_new_tokens
-        assert total <= self.cfg.seq_len, "generation would exceed context length"
-        cache = KVCache(
-            self.cfg.n_layer, B, self.cfg.n_kv_head, total, self.cfg.head_dim,
-            idx.device, self.embed.weight.dtype,
-        )
-        logits, _ = self(idx, cache=cache)
-        for _ in range(max_new_tokens):
-            logits_last = logits[:, -1, :]
-            if temperature == 0.0:
-                next_tok = logits_last.argmax(-1, keepdim=True)
-            else:
-                logits_last = logits_last / temperature
-                if top_k is not None:
-                    kth = torch.topk(logits_last, min(top_k, logits_last.size(-1))).values[:, -1:]
-                    logits_last = logits_last.masked_fill(logits_last < kth, float("-inf"))
-                if top_p is not None:
-                    sorted_logits, sorted_idx = torch.sort(logits_last, descending=True)
-                    probs = F.softmax(sorted_logits, dim=-1)
-                    mask = probs.cumsum(-1) - probs > top_p
-                    sorted_logits = sorted_logits.masked_fill(mask, float("-inf"))
-                    logits_last = torch.full_like(logits_last, float("-inf")).scatter(
-                        1, sorted_idx, sorted_logits
+        if total > self.cfg.seq_len:
+            raise ValueError("generation would exceed context length")
+        if max_new_tokens == 0:
+            return idx
+
+        was_training = self.training
+        self.eval()
+        try:
+            cache = KVCache(
+                self.cfg.n_layer, B, self.cfg.n_kv_head, total, self.cfg.head_dim,
+                idx.device, self.embed.weight.dtype,
+            )
+            logits, _ = self(idx, cache=cache)
+            finished = torch.zeros(B, dtype=torch.bool, device=idx.device)
+            for token_idx in range(max_new_tokens):
+                logits_last = logits[:, -1, :]
+                if temperature == 0.0:
+                    next_tok = logits_last.argmax(-1, keepdim=True)
+                else:
+                    logits_last = logits_last / temperature
+                    if top_k is not None:
+                        kth = torch.topk(
+                            logits_last, min(top_k, logits_last.size(-1))
+                        ).values[:, -1:]
+                        logits_last = logits_last.masked_fill(logits_last < kth, float("-inf"))
+                    if top_p is not None:
+                        sorted_logits, sorted_idx = torch.sort(logits_last, descending=True)
+                        probs = F.softmax(sorted_logits, dim=-1)
+                        mask = probs.cumsum(-1) - probs > top_p
+                        sorted_logits = sorted_logits.masked_fill(mask, float("-inf"))
+                        logits_last = torch.full_like(logits_last, float("-inf")).scatter(
+                            1, sorted_idx, sorted_logits
+                        )
+                    next_tok = torch.multinomial(F.softmax(logits_last, dim=-1), num_samples=1)
+                if eos_id is not None:
+                    next_tok = torch.where(
+                        finished[:, None], torch.full_like(next_tok, eos_id), next_tok
                     )
-                next_tok = torch.multinomial(F.softmax(logits_last, dim=-1), num_samples=1)
-            idx = torch.cat([idx, next_tok], dim=1)
-            if eos_id is not None and (next_tok == eos_id).all():
-                break
-            logits, _ = self(next_tok, cache=cache)
-        return idx
+                    finished |= next_tok.squeeze(1).eq(eos_id)
+                idx = torch.cat([idx, next_tok], dim=1)
+                if eos_id is not None and finished.all():
+                    break
+                if token_idx + 1 < max_new_tokens:
+                    logits, _ = self(next_tok, cache=cache)
+            return idx
+        finally:
+            self.train(was_training)

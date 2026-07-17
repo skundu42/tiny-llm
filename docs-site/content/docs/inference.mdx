@@ -14,43 +14,43 @@ obeys, what the cache costs in bytes, and how the three sampling knobs compose.
 ```python
 @torch.no_grad()
 def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, eos_id=None):
-    self.eval()
+    # Validate shape, length, temperature/top-k/top-p, and eos_id up front.
+    ...
     B, T = idx.shape
     total = T + max_new_tokens
-    assert total <= self.cfg.seq_len, "generation would exceed context length"
-    cache = KVCache(
-        self.cfg.n_layer, B, self.cfg.n_kv_head, total, self.cfg.head_dim,
-        idx.device, self.embed.weight.dtype,
-    )
-    logits, _ = self(idx, cache=cache)
-    for _ in range(max_new_tokens):
-        logits_last = logits[:, -1, :]
-        if temperature == 0.0:
-            next_tok = logits_last.argmax(-1, keepdim=True)
-        else:
-            logits_last = logits_last / temperature
-            if top_k is not None:
-                kth = torch.topk(logits_last, min(top_k, logits_last.size(-1))).values[:, -1:]
-                logits_last = logits_last.masked_fill(logits_last < kth, float("-inf"))
-            if top_p is not None:
-                sorted_logits, sorted_idx = torch.sort(logits_last, descending=True)
-                probs = F.softmax(sorted_logits, dim=-1)
-                mask = probs.cumsum(-1) - probs > top_p
-                sorted_logits = sorted_logits.masked_fill(mask, float("-inf"))
-                logits_last = torch.full_like(logits_last, float("-inf")).scatter(
-                    1, sorted_idx, sorted_logits
+    if total > self.cfg.seq_len:
+        raise ValueError("generation would exceed context length")
+    if max_new_tokens == 0:
+        return idx
+
+    was_training = self.training
+    self.eval()
+    try:
+        cache = KVCache(...)
+        logits, _ = self(idx, cache=cache)
+        finished = torch.zeros(B, dtype=torch.bool, device=idx.device)
+        for token_idx in range(max_new_tokens):
+            # temperature -> top-k -> top-p -> sample
+            ...
+            if eos_id is not None:
+                next_tok = torch.where(
+                    finished[:, None], torch.full_like(next_tok, eos_id), next_tok
                 )
-            next_tok = torch.multinomial(F.softmax(logits_last, dim=-1), num_samples=1)
-        idx = torch.cat([idx, next_tok], dim=1)
-        if eos_id is not None and (next_tok == eos_id).all():
-            break
-        logits, _ = self(next_tok, cache=cache)
-    return idx
+                finished |= next_tok.squeeze(1).eq(eos_id)
+            idx = torch.cat([idx, next_tok], dim=1)
+            if eos_id is not None and finished.all():
+                break
+            if token_idx + 1 < max_new_tokens:
+                logits, _ = self(next_tok, cache=cache)
+        return idx
+    finally:
+        self.train(was_training)
 ```
 
 Three structural decisions are visible before any sampling happens:
 
-- **The length is checked up front.** `assert total <= self.cfg.seq_len` fails
+- **Inputs and length are checked up front.** Invalid sampling controls raise a
+  descriptive `ValueError`, and `total <= self.cfg.seq_len` is enforced
   *before* a single token is generated. Prompt plus new tokens must fit the
   context: there is no sliding window, no rolling eviction, no truncation. At
   `d26`'s `seq_len = 2048`, a 1,900-token prompt leaves you 148 tokens. The assert
@@ -246,7 +246,7 @@ The formula's last factor is `self.embed.weight.dtype`, not an assumption. **The
 
 ```python
 def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     cfg = ModelConfig(**ckpt["model_cfg"])
     model = TinyLLM(cfg).to(device)
     model.load_state_dict(ckpt["model"])
@@ -377,27 +377,21 @@ two wins. `tinyllm.sample` defaults `top_p` to `None` (off), `top_k` to 50.
 
 ```python
 next_tok = torch.multinomial(F.softmax(logits_last, dim=-1), num_samples=1)
+next_tok = torch.where(finished[:, None], torch.full_like(next_tok, eos_id), next_tok)
+finished |= next_tok.squeeze(1).eq(eos_id)
 idx = torch.cat([idx, next_tok], dim=1)
-if eos_id is not None and (next_tok == eos_id).all():
+if eos_id is not None and finished.all():
     break
-logits, _ = self(next_tok, cache=cache)
+if token_idx + 1 < max_new_tokens:
+    logits, _ = self(next_tok, cache=cache)
 ```
 
 One softmax over the surviving logits, one categorical draw. Note the order at the
 bottom: the token is **appended before the break check**, so an emitted `eos` is
-included in the returned sequence, and the break happens **before** the next
-forward: no wasted compute on a token nobody will read.
-
-<Callout type="warn">
-  **`.all()` is a batch limitation.** Generation stops only when *every* sequence
-  in the batch emits `eos` on the same step. With `B > 1`, a sequence that
-  finishes early keeps generating: its `eos` is in `idx`, but tokens continue to
-  be appended after it, and those tokens are garbage conditioned on a finished
-  document. There is no per-sequence finished mask and no padding. For batched
-  generation, truncate each row at its first `eos_id` yourself. At `B = 1` (what
-  `tinyllm.sample` does), `.all()` is just `.item()` and the behavior is exactly
-  what you want.
-</Callout>
+included in the returned sequence. A per-row `finished` mask forces subsequent
+positions for completed rows to stay at `eos_id` while other rows continue. The
+batch stops once every row is finished. The iteration bound also skips the
+otherwise-unused decode after the final requested token.
 
 `generate` returns the **full** `idx`: prompt tokens followed by generated ones.
 Slice off the prompt if you only want the continuation.

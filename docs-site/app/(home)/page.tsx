@@ -17,7 +17,7 @@ const SPECS = [
   { value: '~10B tokens', detail: 'FineWeb-Edu, ≈Chinchilla-optimal' },
   { value: 'Muon + AdamW', detail: 'WSD schedule, bf16 autocast' },
   { value: '≈20 h · ~$50', detail: 'the real run, on one H100' },
-  { value: '58 tests', detail: 'no transformers dependency' },
+  { value: '100 tests', detail: 'no transformers dependency' },
 ];
 
 const COMPONENTS = [

@@ -34,21 +34,27 @@ identical code path.
 | `rope_theta` | 10,000 | 10,000 |
 | `norm_eps` | 1e-6 | 1e-6 |
 
-`head_dim` is not a field; it is derived, and `__post_init__` enforces the two
+`head_dim` is not a field; it is derived, and `__post_init__` enforces the
 invariants the attention implementation depends on:
 
 ```python
 def __post_init__(self) -> None:
-    assert self.d_model % self.n_head == 0, "d_model must divide evenly into heads"
-    assert self.n_head % self.n_kv_head == 0, "n_head must be a multiple of n_kv_head"
+    ...
+    if self.d_model % self.n_head != 0:
+        raise ValueError("d_model must divide evenly into heads")
+    if self.n_head % self.n_kv_head != 0:
+        raise ValueError("n_head must be a multiple of n_kv_head")
+    if self.head_dim % 2 != 0:
+        raise ValueError("head_dim must be even for RoPE")
 
 @property
 def head_dim(self) -> int:
     return self.d_model // self.n_head
 ```
 
-`d_model % n_head == 0` makes `head_dim` an integer; `n_head % n_kv_head == 0`
-makes the GQA repeat factor `n_head // n_kv_head` an integer. For `d26` that is
+`d_model % n_head == 0` makes `head_dim` an integer; the even-width check lets
+RoPE rotate coordinate pairs; and `n_head % n_kv_head == 0` makes the GQA repeat
+factor `n_head // n_kv_head` an integer. For `d26` that is
 `1280 / 20 = 64` and `20 / 4 = 5`: five query heads share each KV head.
 
 The shape choices are conventional for the scale. `head_dim = 64` is the sweet

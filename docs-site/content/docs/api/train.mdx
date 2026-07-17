@@ -3,7 +3,7 @@ title: tinyllm.train
 description: lr_scale, run, main and PEAK_FLOPS; the pretraining entry point, its return value, and the full CLI
 ---
 
-289 lines: `tinyllm/train.py`. bf16 autocast, gradient accumulation, the WSD
+360 lines: `tinyllm/train.py`. bf16 autocast, gradient accumulation, the WSD
 schedule, Muon+AdamW, DDP via `torchrun`, atomic checkpoints with bit-exact
 resume, inline MFU. [The training loop](/docs/training) walks the internals;
 this page is the signature reference.
@@ -25,14 +25,15 @@ The master-rank logging branch uses it to compute MFU inline, every
 `log_every` steps:
 
 ```python
-flops_per_token = 6 * N + 12 * mc.n_layer * mc.d_model * mc.seq_len
+flops_per_token = 6 * raw_model.num_params() + 12 * mc.n_layer * mc.d_model * mc.seq_len
 mfu = flops_per_token * tok_s / peak_flops if peak_flops else None
 ```
 
-`N` is `raw_model.num_params(non_embedding=True)`, computed once outside the
-loop. At `d26`'s 447,354,368 non-embedding parameters, `flops_per_token ≈
-3.50e9`; at a hypothetical 139k tok/s on an H100 that is `3.50e9 × 139e3 /
-989e12` ≈ **49%** MFU, an illustrative number, not a measured one, since this
+The total parameter count is used because the tied embedding matrix also serves
+as the dense output projection and therefore performs a matmul for every token.
+At `d26`, `flops_per_token ≈ 3.75e9`; at a hypothetical 139k tok/s on an H100
+that is `3.75e9 × 139e3 / 989e12` ≈ **53%** MFU, an illustrative number, not a
+measured one, since this
 repo has not yet run the full `d26` config on real hardware. See
 [MFU](/docs/training#logging-throughput-and-mfu).
 
@@ -116,8 +117,9 @@ The whole pretraining loop. Everything `main()` does is parse flags and call thi
 | `final_val_loss` | `float` | Last validation loss; `nan` if none ran |
 | `step` | `int` | `train_cfg.total_steps`, the configured total, **not** steps executed |
 
-**Raises:** `AssertionError` if `batch_tokens % (world × micro_batch_size ×
-seq_len) != 0`; `FileNotFoundError` if `resume=True` and no checkpoint exists.
+**Raises:** `ValueError` for invalid config/batch math or an incompatible resume
+checkpoint; `FileExistsError` when a fresh run would reuse an existing log or
+checkpoint; `FileNotFoundError` if `resume=True` and no checkpoint exists.
 
 **Side effects:** creates `out_dir`; appends to `out_dir/log.csv`; writes
 `out_dir/ckpt_last.pt` every `ckpt_every` steps and on the final step; optionally
@@ -134,10 +136,11 @@ Behavior worth knowing as a caller:
   device.startswith("cuda")`. Off CUDA it prints `torch.compile disabled: not on
   CUDA` and continues.
 - **The seed is per-rank** (`torch.manual_seed(tc.seed + rank)`), while data draws
-  are seeded by `(seed, rank, step, micro)` so ranks read disjoint crops.
-- **`log.csv` is opened in append mode** (`"a"`) and only gets a header if the file
-  is new, so a resumed run continues one CSV, and a **reused `out_dir` silently
-  concatenates two runs' curves**.
+  are seeded by `(seed, rank, step, micro)` so ranks make independent,
+  deterministic draws. Sampling is with replacement, so overlap is possible.
+- **Existing output is explicit.** A resumed run appends to its CSV. A fresh run
+  refuses an `out_dir` that already contains `log.csv` or `ckpt_last.pt`, preventing
+  duplicate step ranges and accidental checkpoint replacement.
 
 ```python
 from dataclasses import replace
@@ -160,8 +163,8 @@ def main() -> None:
     ...
 ```
 
-The `python -m tinyllm.train` entry point. Parses flags, **mutates the chosen
-presets in place**, and calls `run`.
+The `python -m tinyllm.train` entry point. Parses flags, copies the chosen presets
+with `dataclasses.replace`, applies overrides to the copies, and calls `run`.
 
 ```bash
 uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
@@ -180,16 +183,14 @@ uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
 | `--dtype` | `{auto, bf16, fp32}` | Override precision |
 | `--wandb` | `str` | Sets `wandb_project` (empty = disabled) |
 
-Three sharp edges:
+Two details:
 
 - **`--config` defaults to `smoke`**, not `d26`. Running `python -m tinyllm.train`
   bare trains the 13M model.
-- **The presets are mutated in place.** `tc = TRAIN_PRESETS[args.config]` is a
-  reference, and `tc.total_steps = args.steps` writes through to the module-level
-  dict. Harmless for a CLI process; a trap if you import `main` into a longer-lived
-  one.
-- **`if args.steps:` means `--steps 0` is ignored**: `0` is falsy, so it is
-  indistinguishable from "not passed". Same for `--data-dir ""`.
+- **Overrides never mutate module-level presets.** Repeated calls in one process
+  start from clean defaults.
+- **`--steps 0` is parsed, then rejected by config validation** instead of being
+  silently ignored.
 
 ```bash
 # resume after a preemption
@@ -230,14 +231,13 @@ step,split,loss,lr_scale,tok_per_sec
 at `.6f` here while stdout prints `.4f`, so the CSV is the more precise record
 of the same number.
 
-<Callout type="warn">
-  **Ignore the first row's `tok_per_sec`.** `tok_s = tc.batch_tokens *
-  tc.log_every / max(now - t_last, 1e-9)` always credits **`log_every` steps'
-  worth of tokens** to the elapsed time, but at step 0 only *one* step has run
-  since `t_last` was set, so the figure is inflated roughly `log_every`× and
-  `61272` above is an artifact, not throughput. The steady-state rate is the
-  ~13,100 tok/s from step 10 onward. The same distortion applies to the first log
-  line after any resume.
+<Callout type="info">
+  The recorded `61272` first row above came from the older timing implementation
+  and is inflated. Current runs track the exact number of optimizer steps and
+  accumulate training-only wall time, synchronizing before validation,
+  checkpoint, sample, and log boundaries. Step 0 and the first interval after a
+  resume therefore report one step's real throughput, while eval/checkpoint time
+  no longer depresses the following row.
 </Callout>
 
 ### `ckpt_last.pt`

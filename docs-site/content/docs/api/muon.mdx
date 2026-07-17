@@ -3,7 +3,7 @@ title: tinyllm.muon
 description: zeropower_via_newtonschulz5, the Muon optimizer, and build_optimizers; exact signatures and the three-bucket parameter split
 ---
 
-91 lines: `tinyllm/muon.py`. An optimizer that orthogonalizes each 2-D weight's
+92 lines: `tinyllm/muon.py`. An optimizer that orthogonalizes each 2-D weight's
 momentum-smoothed gradient with a quintic Newton-Schulz iteration, plus the
 function that decides which parameters get it. [Muon](/docs/training/muon) derives
 the method; this page is the signature reference.
@@ -20,7 +20,7 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor
 **Returns:** a tensor of `G`'s shape and dtype, approximating `U Vᵀ`: `G` with
 every singular value driven to ≈ 1.
 
-**Raises:** `AssertionError` if `G.ndim != 2`.
+**Raises:** `ValueError` if `G.ndim != 2`.
 
 Computes the orthogonalization **without ever forming an SVD**. Internals worth
 knowing as a caller:

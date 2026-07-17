@@ -92,7 +92,12 @@ class BPETokenizer:
         min_word_freq: int = 1,
         verbose: bool = False,
     ) -> "BPETokenizer":
-        assert vocab_size >= 257, "need room for 256 bytes + <|endoftext|>"
+        if vocab_size < 257:
+            raise ValueError("need room for 256 bytes + <|endoftext|>")
+        if num_proc <= 0:
+            raise ValueError("num_proc must be positive")
+        if min_word_freq <= 0:
+            raise ValueError("min_word_freq must be positive")
         n_merges = vocab_size - 256 - 1
 
         word_counts: Counter[bytes] = Counter()

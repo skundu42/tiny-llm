@@ -14,7 +14,7 @@ this page is the signature reference.
 
 ```python
 def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     cfg = ModelConfig(**ckpt["model_cfg"])
     model = TinyLLM(cfg).to(device)
     model.load_state_dict(ckpt["model"])
@@ -36,9 +36,9 @@ decide which examples fit.
 
 Two things to note:
 
-- **`weights_only=False`** is required because the checkpoint holds config dicts
-  and optimizer state, not just tensors. **Only load checkpoints you trust**:
-  this path can execute arbitrary code via pickle.
+- **`weights_only=True`** restricts deserialization to tensors and safe primitive
+  containers. Config dictionaries and optimizer state fit that format, so loading
+  a checkpoint does not need unrestricted pickle execution.
 - **The model loads in fp32.** `TinyLLM(cfg)` constructs at PyTorch's default
   dtype and the checkpoint's fp32 master weights load straight in. Cast with
   `model.bfloat16()` if you want bf16; the [KV cache follows

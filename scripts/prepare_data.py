@@ -30,8 +30,18 @@ def main() -> None:
     p.add_argument("--max-tokens", type=int, default=0, help="0 = entire subset")
     p.add_argument("--slow", action="store_true", help="use the pure-Python encoder")
     args = p.parse_args()
+    if args.val_tokens <= 0:
+        p.error("--val-tokens must be positive")
+    if args.shard_tokens <= 0:
+        p.error("--shard-tokens must be positive")
+    if args.max_tokens < 0:
+        p.error("--max-tokens must be non-negative")
+    if args.max_tokens and args.max_tokens <= args.val_tokens:
+        p.error("--max-tokens must exceed --val-tokens so the train split is non-empty")
 
     tok = BPETokenizer.load(args.tokenizer)
+    if tok.vocab_size > 65_536:
+        p.error("tokenizer vocabulary exceeds the uint16 shard limit of 65536")
     eot = tok.eot_id
 
     ds = load_dataset(args.dataset, name=args.dataset_config or None,

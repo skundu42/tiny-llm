@@ -1,4 +1,6 @@
-from tinyllm.config import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig
+import pytest
+
+from tinyllm.config import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
 
 
 def test_presets_exist():
@@ -19,9 +21,24 @@ def test_smoke_shape():
 
 
 def test_invalid_heads_rejected():
-    import pytest
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         ModelConfig(n_head=7, n_kv_head=3)
+
+
+def test_odd_head_dim_rejected():
+    with pytest.raises(ValueError, match="head_dim must be even"):
+        ModelConfig(n_head=2, n_kv_head=1, d_model=6)
+
+
+@pytest.mark.parametrize("field", ["vocab_size", "n_layer", "n_head", "seq_len"])
+def test_non_positive_model_dimensions_rejected(field):
+    with pytest.raises(ValueError, match=field):
+        ModelConfig(**{field: 0})
+
+
+def test_invalid_training_cadence_rejected():
+    with pytest.raises(ValueError, match="log_every"):
+        TrainConfig(log_every=0)
 
 
 def test_batch_math_divisible():

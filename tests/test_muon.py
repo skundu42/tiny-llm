@@ -20,6 +20,13 @@ def test_newton_schulz_handles_wide_matrices():
     assert X.shape == G.shape
 
 
+def test_newton_schulz_rejects_non_matrix():
+    import pytest
+
+    with pytest.raises(ValueError, match="two-dimensional"):
+        zeropower_via_newtonschulz5(torch.randn(8))
+
+
 def test_muon_converges_on_regression():
     torch.manual_seed(0)
     W = torch.nn.Parameter(torch.zeros(16, 8))

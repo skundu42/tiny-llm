@@ -14,7 +14,8 @@ from .config import TrainConfig
 
 def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
     """Approximate UV^T for G = USV^T via quintic Newton-Schulz in bfloat16."""
-    assert G.ndim == 2
+    if G.ndim != 2:
+        raise ValueError(f"G must be two-dimensional, got shape {tuple(G.shape)}")
     a, b, c = (3.4445, -4.7750, 2.0315)
     X = G.bfloat16()
     transposed = G.size(0) > G.size(1)

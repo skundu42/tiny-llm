@@ -15,6 +15,12 @@ yarn dev
 
 Open http://localhost:3000 with your browser to see the result.
 
+For production, set `NEXT_PUBLIC_SITE_URL` to the canonical absolute origin
+(for example, `https://docs.example.com`). It is used as Next.js `metadataBase`
+for Open Graph image URLs. Vercel deployments fall back to
+`VERCEL_PROJECT_PRODUCTION_URL`/`VERCEL_URL`; local development falls back to
+`http://localhost:3000`.
+
 ## Explore
 
 In the project, you can see:

@@ -27,7 +27,7 @@ Optimization uses a **Muon + AdamW hybrid**: Muon (momentum + Newton-Schulz orth
 
 ```bash
 uv sync
-uv run pytest -q                    # 58 tests, a few seconds
+uv run pytest -q                    # 100 tests, a few seconds
 ```
 
 The test suite covers every component (tokenizer, model, Muon, data sharding, training loop, eval) against hand-derived reference implementations, and needs no downloaded data.

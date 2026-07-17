@@ -3,7 +3,7 @@ title: tinyllm.data
 description: ShardWriter and TokenShards; the uint16 shard format, memmapped random-crop sampling, and the prepare_data CLI
 ---
 
-100 lines: `tinyllm/data.py`. One class writes token ids into fixed-size uint16
+126 lines: `tinyllm/data.py`. One class writes token ids into fixed-size uint16
 `.bin` shards, another memory-maps them back and samples random crops. No
 `DataLoader`, no workers, no collate function. See [Data](/docs/data) for the
 design.
@@ -43,8 +43,9 @@ class ShardWriter:
 **Args:** `out_dir`: created if missing; `split`: `"train"` / `"val"`, used as
 the filename prefix and the index key; `shard_tokens`: tokens per shard.
 
-**Raises:** `ValueError` if `out_dir`'s `index.json` already lists a non-empty
-`split`: *"already contains a 'train' split; use a fresh directory"*.
+**Raises:** `ValueError` if `shard_tokens <= 0`, or if `out_dir`'s `index.json`
+already lists a non-empty `split`: *"already contains a 'train' split; use a
+fresh directory"*.
 
 **Attributes:** `total_written`: tokens accepted by `write()`; `entries`: shard
 records so far; `buffer`, `fill`: the in-memory shard being filled.
@@ -64,7 +65,16 @@ corpora in one split with no way to tell. It fails loudly instead.
 
 ```python
 def write(self, ids: Sequence[int]) -> None:
-    arr = np.asarray(ids, dtype=np.uint16)
+    raw = np.asarray(ids)
+    if raw.ndim != 1:
+        raise ValueError(...)
+    if raw.size == 0:
+        return
+    if not np.issubdtype(raw.dtype, np.integer):
+        raise TypeError(...)
+    if raw.min() < 0 or raw.max() > np.iinfo(np.uint16).max:
+        raise ValueError(...)
+    arr = raw.astype(np.uint16, copy=False)
     self.total_written += len(arr)
     while len(arr) > 0:
         n = min(len(arr), self.shard_tokens - self.fill)
@@ -75,12 +85,16 @@ def write(self, ids: Sequence[int]) -> None:
             self._flush()
 ```
 
-**Args:** `ids`: any sequence of ints, **any length**. **Returns:** `None`.
+**Args:** `ids`: a one-dimensional sequence of integer ids in `0..65535`, **any
+length**. **Returns:** `None`. Invalid shapes, dtypes, and ranges are rejected
+before conversion, so uint16 overflow cannot silently corrupt a shard.
 
 The `while` loop is what makes the caller's life simple: a document longer than a
 shard is split across as many as it needs, and **documents are never padded or
-truncated to shard boundaries**. Shards are a storage detail, not a semantic one:
-a document can straddle two, and the sampler does not care.
+truncated to shard boundaries**. A document can straddle two shards. The sampler
+does not create crops across a physical shard boundary, so only the small number
+of windows crossing each boundary are omitted; no incorrect token transition is
+introduced.
 
 `np.uint16` caps the vocabulary at **65,536**. At 32,768 we use half the range and
 each token costs **2 bytes**: 10B tokens = ~19 GiB rather than the ~37 GiB
@@ -123,7 +137,9 @@ class TokenShards:
 
 **Args:** `data_dir`: directory containing `index.json`; `split`: key to load.
 
-**Raises:** `FileNotFoundError` if no index; `KeyError` if the split is absent.
+**Raises:** `FileNotFoundError` if no index; `KeyError` if the split is absent;
+`ValueError` for the wrong dtype, an empty split, or a shard whose file length
+does not match its index entry.
 
 **Attributes:** `shards`: a `list[np.memmap]`, one per `.bin`; `sizes`:
 `np.ndarray[int64]` of token counts; `total_tokens`: `int`, their sum.
@@ -138,9 +154,12 @@ enough inline that a background worker would be pure overhead.
 ```python
 def sample_batch(self, batch_size: int, seq_len: int, rng: np.random.Generator,
                  device: str | torch.device = "cpu"):
+    if batch_size <= 0 or seq_len <= 0:
+        raise ValueError(...)
     usable = self.sizes - (seq_len + 1)
     positions = np.clip(usable + 1, 0, None)  # count of valid crop offsets per shard
-    assert positions.sum() > 0, "no shard is long enough for this seq_len"
+    if positions.sum() == 0:
+        raise ValueError("no shard is long enough for this seq_len")
     p = positions.astype(np.float64) / positions.sum()
     shard_ids = rng.choice(len(self.shards), size=batch_size, p=p)
     xs = np.empty((batch_size, seq_len + 1), dtype=np.int64)
@@ -161,7 +180,8 @@ def sample_batch(self, batch_size: int, seq_len: int, rng: np.random.Generator,
 **Returns:** `(x, y)`, each `(batch_size, seq_len)` `int64`, where `y` is `x`
 shifted one position, the next-token targets.
 
-**Raises:** `AssertionError` if no shard can fit `seq_len + 1`.
+**Raises:** `ValueError` for non-positive batch/sequence sizes, or if no shard can
+fit `seq_len + 1`.
 
 Four things worth knowing:
 
@@ -176,7 +196,8 @@ Four things worth knowing:
 - **The RNG is a parameter, not state.** The caller builds a fresh
   `np.random.default_rng([seed, rank, step, micro])` per call, so a batch is a pure
   function of its coordinates. This is what makes [resume](/docs/training/checkpointing)
-  bit-exact and DDP ranks disjoint: no generator state to checkpoint.
+  bit-exact. Different DDP ranks draw independent deterministic crops; overlap is
+  possible, as with any random sampling with replacement.
 - **Crops can straddle document boundaries**, and that is deliberate: the
   `<|endoftext|>` between documents teaches the model where they end.
 
@@ -215,6 +236,10 @@ tokenizer, and writes shards. The defaults are the `d26` configuration.
 | `--shard-tokens` | `100_000_000` | Tokens per shard |
 | `--max-tokens` | `0` | `0` = the entire subset |
 | `--slow` | off | Use the pure-Python encoder instead of the fast one |
+
+The CLI rejects non-positive validation/shard sizes, negative token budgets, a
+finite budget that cannot leave any training data after validation, and a
+tokenizer whose vocabulary exceeds uint16 capacity.
 
 Three mechanics worth reading in source:
 

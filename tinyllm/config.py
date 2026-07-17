@@ -15,8 +15,28 @@ class ModelConfig:
     norm_eps: float = 1e-6
 
     def __post_init__(self) -> None:
-        assert self.d_model % self.n_head == 0, "d_model must divide evenly into heads"
-        assert self.n_head % self.n_kv_head == 0, "n_head must be a multiple of n_kv_head"
+        positive_ints = {
+            "vocab_size": self.vocab_size,
+            "n_layer": self.n_layer,
+            "n_head": self.n_head,
+            "n_kv_head": self.n_kv_head,
+            "d_model": self.d_model,
+            "d_ff": self.d_ff,
+            "seq_len": self.seq_len,
+        }
+        for name, value in positive_ints.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be positive, got {value}")
+        if self.rope_theta <= 0:
+            raise ValueError(f"rope_theta must be positive, got {self.rope_theta}")
+        if self.norm_eps <= 0:
+            raise ValueError(f"norm_eps must be positive, got {self.norm_eps}")
+        if self.d_model % self.n_head != 0:
+            raise ValueError("d_model must divide evenly into heads")
+        if self.n_head % self.n_kv_head != 0:
+            raise ValueError("n_head must be a multiple of n_kv_head")
+        if self.head_dim % 2 != 0:
+            raise ValueError("head_dim must be even for RoPE")
 
     @property
     def head_dim(self) -> int:
@@ -53,6 +73,40 @@ class TrainConfig:
     ckpt_every: int = 1000
     sample_every: int = 1000
     wandb_project: str = ""             # empty = wandb disabled
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        positive_ints = {
+            "batch_tokens": self.batch_tokens,
+            "micro_batch_size": self.micro_batch_size,
+            "total_steps": self.total_steps,
+            "log_every": self.log_every,
+            "val_every": self.val_every,
+            "val_batches": self.val_batches,
+            "ckpt_every": self.ckpt_every,
+            "sample_every": self.sample_every,
+        }
+        for name, value in positive_ints.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be positive, got {value}")
+        if self.warmup_steps < 0:
+            raise ValueError("warmup_steps must be non-negative")
+        if not 0.0 <= self.decay_frac <= 1.0:
+            raise ValueError("decay_frac must be between 0 and 1")
+        if self.muon_lr < 0 or self.adamw_lr < 0:
+            raise ValueError("learning rates must be non-negative")
+        if not 0.0 <= self.muon_momentum < 1.0:
+            raise ValueError("muon_momentum must be in [0, 1)")
+        if any(not 0.0 <= beta < 1.0 for beta in self.adamw_betas):
+            raise ValueError("AdamW betas must be in [0, 1)")
+        if self.adamw_wd < 0:
+            raise ValueError("adamw_wd must be non-negative")
+        if self.grad_clip <= 0:
+            raise ValueError("grad_clip must be positive")
+        if self.dtype not in {"auto", "bf16", "fp32"}:
+            raise ValueError(f"unsupported dtype: {self.dtype}")
 
 
 MODEL_PRESETS: dict[str, ModelConfig] = {

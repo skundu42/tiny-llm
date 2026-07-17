@@ -1,9 +1,11 @@
 import numpy as np
+import pytest
 import torch
 
 from tinyllm.config import ModelConfig, TrainConfig
 from tinyllm.data import ShardWriter
-from tinyllm.train import lr_scale, run
+from tinyllm.model import TinyLLM
+from tinyllm.train import _distributed_mean, _flops_per_token, lr_scale, run
 
 
 def _micro_cfgs(tmp_path, steps=60):
@@ -53,7 +55,7 @@ def test_resume_is_bit_exact(tmp_path):
     mcfg, tcfg = _micro_cfgs(tmp_path, steps=10)
 
     run(mcfg, tcfg, device="cpu")
-    full = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+    full = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=True)
 
     import shutil
     shutil.rmtree(tmp_path / "out")
@@ -61,7 +63,7 @@ def test_resume_is_bit_exact(tmp_path):
     run(mcfg2, tcfg2, device="cpu")
     mcfg3, tcfg3 = _micro_cfgs(tmp_path, steps=10)
     run(mcfg3, tcfg3, device="cpu", resume=True)
-    resumed = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+    resumed = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=True)
 
     assert full["step"] == resumed["step"] == 10
     for k in full["model"]:
@@ -72,7 +74,49 @@ def test_checkpoint_contains_configs(tmp_path):
     _write_cyclic_data(tmp_path)
     mcfg, tcfg = _micro_cfgs(tmp_path, steps=6)
     run(mcfg, tcfg, device="cpu")
-    ckpt = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+    ckpt = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=True)
     assert ckpt["model_cfg"]["n_layer"] == 2
     assert ckpt["train_cfg"]["total_steps"] == 6
     assert len(ckpt["optimizers"]) == 2
+
+
+def test_fresh_run_refuses_existing_output(tmp_path):
+    _write_cyclic_data(tmp_path)
+    mcfg, tcfg = _micro_cfgs(tmp_path, steps=1)
+    run(mcfg, tcfg, device="cpu")
+    with pytest.raises(FileExistsError, match="--resume"):
+        run(mcfg, tcfg, device="cpu")
+
+
+def test_resume_rejects_model_config_mismatch(tmp_path):
+    _write_cyclic_data(tmp_path)
+    mcfg, tcfg = _micro_cfgs(tmp_path, steps=1)
+    run(mcfg, tcfg, device="cpu")
+    changed = ModelConfig(**{**mcfg.__dict__, "rope_theta": 20_000.0})
+    with pytest.raises(ValueError, match="model config"):
+        run(changed, tcfg, device="cpu", resume=True)
+
+
+def test_distributed_mean_reduces_and_does_not_mutate(monkeypatch):
+    value = torch.tensor(2.0)
+
+    def fake_all_reduce(tensor, op):
+        assert op == torch.distributed.ReduceOp.SUM
+        tensor.add_(4.0)
+
+    monkeypatch.setattr("tinyllm.train.dist.all_reduce", fake_all_reduce)
+    result = _distributed_mean(value, world=2)
+    assert result.item() == 3.0
+    assert value.item() == 2.0
+
+
+def test_flops_count_includes_tied_output_projection():
+    cfg = ModelConfig(vocab_size=64, n_layer=1, n_head=2, n_kv_head=1,
+                      d_model=32, d_ff=64, seq_len=16)
+    model = TinyLLM(cfg)
+    expected = 6 * model.num_params() + 12 * cfg.n_layer * cfg.d_model * cfg.seq_len
+    assert _flops_per_token(model, cfg) == expected
+    assert _flops_per_token(model, cfg) > (
+        6 * model.num_params(non_embedding=True)
+        + 12 * cfg.n_layer * cfg.d_model * cfg.seq_len
+    )

@@ -4,7 +4,7 @@ description: ModelConfig, TrainConfig, and the d26/smoke presets; every field, d
 ---
 
 Two frozen-in-shape dataclasses and two preset dictionaries. `tinyllm/config.py`
-is 78 lines and holds every tunable number in the project; nothing is
+is 132 lines and holds every tunable number in the project; nothing is
 hardcoded downstream.
 
 ## `ModelConfig`
@@ -41,16 +41,23 @@ Architecture. The defaults **are** the `d26` preset: 489,297,408 parameters.
 
 ```python
 def __post_init__(self) -> None:
-    assert self.d_model % self.n_head == 0, "d_model must divide evenly into heads"
-    assert self.n_head % self.n_kv_head == 0, "n_head must be a multiple of n_kv_head"
+    ...
+    if self.d_model % self.n_head != 0:
+        raise ValueError("d_model must divide evenly into heads")
+    if self.n_head % self.n_kv_head != 0:
+        raise ValueError("n_head must be a multiple of n_kv_head")
+    if self.head_dim % 2 != 0:
+        raise ValueError("head_dim must be even for RoPE")
 ```
 
-**Returns:** `None`. Raises `AssertionError` on an inconsistent config.
+**Returns:** `None`. Raises `ValueError` for non-positive dimensions, invalid
+RoPE/norm constants, incompatible head counts, or an odd `head_dim`.
 
 Both invariants are structural. `d_model % n_head == 0` makes `head_dim` an
 integer; `n_head % n_kv_head == 0` makes the GQA groups equal-sized, so SDPA's
 `enable_gqa` grouping lines each KV head up with exactly `n_head // n_kv_head`
-query heads. Dataclasses call this automatically on construction: an invalid
+query heads. An even `head_dim` is required because RoPE rotates pairs of
+coordinates. Dataclasses call this automatically on construction: an invalid
 config fails at the line that creates it, not 200 lines later inside a matmul.
 
 ### `head_dim`
@@ -74,7 +81,7 @@ assert cfg.head_dim == 64
 small = ModelConfig(n_layer=6, d_model=256, n_head=4, n_kv_head=2)
 assert small.head_dim == 64
 
-ModelConfig(d_model=100, n_head=8)  # AssertionError: d_model must divide evenly
+ModelConfig(d_model=100, n_head=8)  # ValueError: d_model must divide evenly
 ```
 
 ## `TrainConfig`
@@ -112,8 +119,10 @@ class TrainConfig:
     wandb_project: str = ""             # empty = wandb disabled
 ```
 
-Everything about the run. No `__post_init__`; validation happens in
-[`run`](/docs/api/train#run), which is where `world_size` is known.
+Everything about the run. `__post_init__` validates positive sizes and cadences,
+schedule ranges, optimizer hyperparameters, and `dtype`. [`run`](/docs/api/train#run)
+validates again after CLI overrides, then checks the world-size-dependent batch
+divisibility invariant.
 
 ### Data and batch
 
@@ -229,9 +238,9 @@ same schedule shape, and the same precision policy as the real run.
 
 <Callout type="warn">
   **The presets are shared mutable instances, not factories.** `MODEL_PRESETS["d26"]`
-  returns the *same* `ModelConfig` object every time, and `tinyllm.train`'s
-  `main()` mutates it in place from CLI flags (`tc.total_steps = args.steps`).
-  Inside a script or notebook that reads a preset twice, use
+  returns the *same* `ModelConfig` object every time. The CLI protects the
+  module-level presets by copying them with `dataclasses.replace` before applying
+  overrides. In your own script or notebook, likewise use
   `dataclasses.replace(TRAIN_PRESETS["d26"], total_steps=100)` to get an
   independent copy.
 </Callout>

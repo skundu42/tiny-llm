@@ -3,7 +3,7 @@ title: tinyllm.model
 description: RMSNorm, RoPE, KVCache, Attention, SwiGLU, Block and TinyLLM; exact signatures, shapes, and usage
 ---
 
-The whole transformer in 217 lines: `tinyllm/model.py`. Pre-norm RMSNorm, RoPE,
+The whole transformer in 276 lines: `tinyllm/model.py`. Pre-norm RMSNorm, RoPE,
 grouped-query attention with QK-norm, SwiGLU, tied embeddings, **no biases
 anywhere**. [Architecture](/docs/architecture) explains the design; this page is
 the signature reference.
@@ -188,7 +188,7 @@ def forward(self, x, cos, sin, cache: "KVCache | None" = None) -> torch.Tensor:
 
 **Returns:** `(B, T, d_model)`.
 
-**Raises:** `AssertionError` if `cache is not None and T > 1 and cache.pos > 0`.
+**Raises:** `ValueError` if `cache is not None and T > 1 and cache.pos > 0`.
 
 Order of operations: project → split heads → **QK-norm** → **RoPE** → cache update
 → repeat KV heads → SDPA → merge → `wo`. `is_causal` is derived as `q.size(2) ==
@@ -319,17 +319,21 @@ def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None,
 | `temperature` | `1.0` | `0.0` → greedy `argmax` (ignores `top_k`/`top_p`) |
 | `top_k` | `None` | Keep the `k` highest logits |
 | `top_p` | `None` | Nucleus threshold, applied **after** `top_k` |
-| `eos_id` | `None` | Stop when **all** batch rows emit it |
+| `eos_id` | `None` | Mark each batch row finished when it emits this id |
 
 **Returns:** `(B, T + n)`: the **full** sequence, prompt included, where `n ≤
 max_new_tokens`.
 
-**Raises:** `AssertionError` if `T + max_new_tokens > cfg.seq_len`.
+**Raises:** `ValueError` for an empty/non-matrix prompt; negative token count or
+temperature; non-positive `top_k`; `top_p` outside `(0, 1]`; an out-of-range
+`eos_id`; or a request beyond `cfg.seq_len`.
 
 Allocates a `KVCache` sized exactly `T + max_new_tokens` with
 `dtype=self.embed.weight.dtype`, prefills the prompt, then decodes one token per
-step. Calls `self.eval()` internally. See [Inference](/docs/inference) for the
-sampling order and the `.all()` batch caveat.
+step. Finished batch rows are padded with `eos_id` while other rows continue, and
+the final sampled token does not trigger an unused decode. The prior train/eval
+mode is restored on return. See [Inference](/docs/inference) for the sampling
+order.
 
 ```python
 import torch

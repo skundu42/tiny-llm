@@ -3,7 +3,7 @@ title: tinyllm.tokenizer
 description: BPETokenizer; training, encode/decode, persistence, and the verified fast export, with exact signatures
 ---
 
-A byte-level BPE tokenizer written from scratch in 248 lines:
+A byte-level BPE tokenizer written from scratch in 253 lines:
 `tinyllm/tokenizer.py`. No `tokenizers` dependency on the critical path: the HF
 library appears only in `export_fast`, as an accelerator that must prove itself
 against this implementation before it is trusted. See
@@ -125,8 +125,8 @@ def train(
 
 **Returns:** a new `BPETokenizer` with `{ENDOFTEXT: 256 + len(merges)}`.
 
-**Raises:** `AssertionError` if `vocab_size < 257` ("need room for 256 bytes +
-`<|endoftext|>`"). `vocab_size == 257` is legal: 256 byte tokens plus
+**Raises:** `ValueError` if `vocab_size < 257`, `num_proc <= 0`, or
+`min_word_freq <= 0`. `vocab_size == 257` is legal: 256 byte tokens plus
 `<|endoftext|>` and zero merges.
 
 Two properties worth relying on:
@@ -303,12 +303,17 @@ uv run python scripts/train_tokenizer.py --max-bytes 250000000
 | `--out` | `tokenizer/tokenizer.json` | Output path |
 | `--max-bytes` | `250_000_000` | Bytes of FineWeb-Edu to train on |
 | `--vocab-size` | `32768` | Target vocab |
-| `--num-proc` | `max(1, os.cpu_count() - 2)` | Counting processes |
+| `--num-proc` | `max(1, (os.cpu_count() or 1) - 2)` | Counting processes |
 | `--min-word-freq` | `2` | Drop pre-tokens seen once |
 
 Streams FineWeb-Edu `sample-10BT`, trains, saves, then measures compression on
 **100 held-out documents**, taken from the same iterator *after* training, so
 they are genuinely unseen:
+
+The CLI rejects non-positive byte/process/frequency settings and vocabularies
+outside `257..65536`, the range supported by the uint16 shard pipeline. A bare
+output filename such as `--out tokenizer.json` is valid; a parent directory is
+created only when the path actually contains one.
 
 ```python
 holdout = [ex["text"] for ex in itertools.islice(it, 100)]

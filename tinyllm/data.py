@@ -19,6 +19,8 @@ class ShardWriter:
     """
 
     def __init__(self, out_dir: str, split: str, shard_tokens: int) -> None:
+        if shard_tokens <= 0:
+            raise ValueError(f"shard_tokens must be positive, got {shard_tokens}")
         os.makedirs(out_dir, exist_ok=True)
         index_path = os.path.join(out_dir, INDEX_NAME)
         if os.path.exists(index_path):
@@ -35,7 +37,16 @@ class ShardWriter:
         self.total_written = 0
 
     def write(self, ids: Sequence[int]) -> None:
-        arr = np.asarray(ids, dtype=np.uint16)
+        raw = np.asarray(ids)
+        if raw.ndim != 1:
+            raise ValueError(f"ids must be one-dimensional, got shape {raw.shape}")
+        if raw.size == 0:
+            return
+        if not np.issubdtype(raw.dtype, np.integer):
+            raise TypeError(f"ids must contain integers, got dtype {raw.dtype}")
+        if raw.min() < 0 or raw.max() > np.iinfo(np.uint16).max:
+            raise ValueError("token ids must be in the uint16 range [0, 65535]")
+        arr = raw.astype(np.uint16, copy=False)
         self.total_written += len(arr)
         while len(arr) > 0:
             n = min(len(arr), self.shard_tokens - self.fill)
@@ -73,19 +84,34 @@ class TokenShards:
     def __init__(self, data_dir: str, split: str) -> None:
         with open(os.path.join(data_dir, INDEX_NAME)) as f:
             index = json.load(f)
+        if index.get("dtype") != "uint16":
+            raise ValueError(f"unsupported shard dtype: {index.get('dtype')!r}")
         entries = index["splits"][split]
+        if not entries:
+            raise ValueError(f"split {split!r} contains no shards")
         self.shards = [
             np.memmap(os.path.join(data_dir, e["file"]), dtype=np.uint16, mode="r")
             for e in entries
         ]
+        for entry, shard in zip(entries, self.shards):
+            if entry["tokens"] != len(shard):
+                raise ValueError(
+                    f"shard {entry['file']!r} has {len(shard)} tokens, "
+                    f"index declares {entry['tokens']}"
+                )
         self.sizes = np.array([len(s) for s in self.shards], dtype=np.int64)
         self.total_tokens = int(self.sizes.sum())
 
     def sample_batch(self, batch_size: int, seq_len: int, rng: np.random.Generator,
                      device: str | torch.device = "cpu"):
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if seq_len <= 0:
+            raise ValueError(f"seq_len must be positive, got {seq_len}")
         usable = self.sizes - (seq_len + 1)
         positions = np.clip(usable + 1, 0, None)  # count of valid crop offsets per shard
-        assert positions.sum() > 0, "no shard is long enough for this seq_len"
+        if positions.sum() == 0:
+            raise ValueError("no shard is long enough for this seq_len")
         p = positions.astype(np.float64) / positions.sum()
         shard_ids = rng.choice(len(self.shards), size=batch_size, p=p)
         xs = np.empty((batch_size, seq_len + 1), dtype=np.int64)

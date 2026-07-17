@@ -11,7 +11,7 @@ from .tokenizer import BPETokenizer
 
 
 def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     cfg = ModelConfig(**ckpt["model_cfg"])
     model = TinyLLM(cfg).to(device)
     model.load_state_dict(ckpt["model"])

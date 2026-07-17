@@ -2,13 +2,14 @@ import type { Metadata } from 'next';
 import { RootProvider } from 'fumadocs-ui/provider/next';
 import './global.css';
 import { Inter } from 'next/font/google';
-import { appName, appDescription } from '@/lib/shared';
+import { appName, appDescription, siteUrl } from '@/lib/shared';
 
 const inter = Inter({
   subsets: ['latin'],
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: appName,
   description: appDescription,
 };

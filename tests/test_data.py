@@ -81,3 +81,33 @@ def test_rewriting_existing_split_raises(tmp_path):
     _write(tmp_path, "val", list(range(500)))
     with pytest.raises(ValueError, match="already contains"):
         ShardWriter(str(tmp_path), "val", shard_tokens=1000)
+
+
+def test_writer_rejects_non_positive_shard_size(tmp_path):
+    with pytest.raises(ValueError, match="shard_tokens must be positive"):
+        ShardWriter(str(tmp_path), "train", shard_tokens=0)
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        [-1],
+        [65536],
+        np.array([65536], dtype=np.int64),
+        [1.5],
+        [[1, 2]],
+    ],
+)
+def test_writer_rejects_invalid_token_ids(tmp_path, tokens):
+    w = ShardWriter(str(tmp_path), "train", shard_tokens=1000)
+    with pytest.raises((TypeError, ValueError)):
+        w.write(tokens)
+
+
+def test_sampler_rejects_invalid_sizes(tmp_path):
+    _write(tmp_path, "train", list(range(5000)))
+    ds = TokenShards(str(tmp_path), "train")
+    with pytest.raises(ValueError, match="batch_size"):
+        ds.sample_batch(0, 32, np.random.default_rng(0))
+    with pytest.raises(ValueError, match="seq_len"):
+        ds.sample_batch(1, 0, np.random.default_rng(0))

@@ -27,10 +27,8 @@ stays constant no matter how many GPUs you throw at the run:
 
 ```python
 micro_tokens = tc.micro_batch_size * mc.seq_len
-assert tc.batch_tokens % (world * micro_tokens) == 0, (
-    f"batch_tokens={tc.batch_tokens} must be divisible by "
-    f"world_size*micro_batch_size*seq_len={world * micro_tokens}"
-)
+if tc.batch_tokens % (world * micro_tokens) != 0:
+    raise ValueError(...)
 grad_accum = tc.batch_tokens // (world * micro_tokens)
 ```
 
@@ -43,10 +41,10 @@ Plug in the `d26` numbers (`micro_batch_size = 8`, `seq_len = 2048`):
   524,288 tokens.
 
 The point: `batch_tokens` is the invariant, and `grad_accum` flexes to absorb
-the world size. Because the effective batch is identical, so is the loss
-trajectory and so are the tuned hyperparameters: scaling out changes wall-clock,
-not the math. The `assert` refuses configs where the split is not clean, so you
-never silently train on a batch that is a few tokens off from what you think.
+the world size. The optimizer sees the same batch *size* and uses the same tuned
+hyperparameters. The exact crops differ with world size because rank participates
+in each stateless RNG seed, so trajectories are statistically comparable rather
+than bit-identical. A `ValueError` refuses configs where the split is not clean.
 
 At the default `total_steps = 19,073`, the run covers
 `19,073 × 524,288 ≈ 10^10` tokens, the ~10B-token budget the `sample-10BT`
@@ -57,7 +55,7 @@ FineWeb-Edu subset is sized for.
 Each optimizer step is an accumulation loop followed by a single update:
 
 ```python
-loss_accum = 0.0
+loss_accum = torch.zeros((), device=device)
 for micro in range(grad_accum):
     rng = np.random.default_rng([tc.seed, rank, step, micro])
     x, y = train_data.sample_batch(tc.micro_batch_size, mc.seq_len, rng, device)
@@ -66,7 +64,7 @@ for micro in range(grad_accum):
     with sync_ctx, ctx:
         _, loss = model(x, targets=y)
     (loss / grad_accum).backward()
-    loss_accum += loss.item() / grad_accum
+    loss_accum += loss.detach() / grad_accum
 
 torch.nn.utils.clip_grad_norm_(raw_model.parameters(), tc.grad_clip)
 for opt in optimizers:
@@ -83,7 +81,9 @@ Reading it line by line:
 - **The loss is scaled by `1 / grad_accum` before `backward`.** Gradients
   accumulate additively across micro-steps, so pre-dividing each one makes the
   accumulated gradient the correct *mean* over the full `batch_tokens`, not the
-  sum. `loss_accum` tracks that same mean for logging.
+  sum. `loss_accum` tracks the local rank's same mean without synchronizing the
+  accelerator on every micro-step. At log steps it is all-reduced into the global
+  rank mean before rank 0 writes it.
 - **`no_sync()` gates the DDP all-reduce** to the final micro-step only, so
   inter-GPU gradient communication happens once per optimizer step instead of
   `grad_accum` times. Covered in [Distributed](/docs/training/distributed).
@@ -192,20 +192,25 @@ cadence, writing to both stdout and a `log.csv` (and optionally Weights &
 Biases):
 
 ```python
-tok_s = tc.batch_tokens * tc.log_every / max(now - t_last, 1e-9)
+tok_s = tc.batch_tokens * steps_since_log / max(train_seconds, 1e-9)
 ```
 
 Throughput is reported in **tokens per second**: total tokens pushed through
 since the last log divided by elapsed wall-clock. **Model FLOPs Utilization
 (MFU)**, the fraction of the hardware's peak actually used, is computed
 inline from it, using the standard transformer FLOPs/token estimate: `6 × N`
-for the matmuls (forward plus backward, `N` = non-embedding parameters) plus
+for the matmuls (forward plus backward, `N` = total parameters) plus
 `12 × n_layer × d_model × seq_len` for attention:
 
 ```python
-flops_per_token = 6 * N + 12 * mc.n_layer * mc.d_model * mc.seq_len
+flops_per_token = 6 * raw_model.num_params() + 12 * mc.n_layer * mc.d_model * mc.seq_len
 mfu = flops_per_token * tok_s / peak_flops
 ```
+
+The tied embedding is included because it is also the dense output projection.
+Timing accumulates only completed optimizer-step work and synchronizes at
+post-step side-effect boundaries, so partial/resumed intervals are exact and
+validation/checkpoint/sample time is excluded.
 
 `peak_flops` is looked up from a small table of dense bf16 peaks, matched
 against `torch.cuda.get_device_name()` by substring:

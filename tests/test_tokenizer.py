@@ -119,3 +119,16 @@ def test_verify_fast_raises_on_mismatch(tok):
     import pytest
     with pytest.raises(ValueError):
         tok.verify_fast(Bogus(), ["hello"])
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"vocab_size": 256}, "need room"),
+        ({"vocab_size": 257, "num_proc": 0}, "num_proc"),
+        ({"vocab_size": 257, "min_word_freq": 0}, "min_word_freq"),
+    ],
+)
+def test_train_rejects_invalid_configuration(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        BPETokenizer.train(["hello"], **kwargs)

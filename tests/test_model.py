@@ -1,3 +1,6 @@
+import types
+
+import pytest
 import torch
 
 from tinyllm.model import RMSNorm, apply_rope, precompute_rope
@@ -114,6 +117,16 @@ def test_kv_cache_matches_full_forward():
     assert torch.allclose(full, stepped, atol=1e-5)
 
 
+def test_kv_cache_rejects_chunked_decode():
+    cfg = _small_cfg()
+    attn = Attention(cfg, layer_idx=0).eval()
+    cos, sin = precompute_rope(cfg.head_dim, cfg.seq_len, cfg.rope_theta)
+    cache = KVCache(1, 1, cfg.n_kv_head, 32, cfg.head_dim, torch.device("cpu"), torch.float32)
+    cache.advance(1)
+    with pytest.raises(ValueError, match="chunked prefill"):
+        attn(torch.randn(1, 2, cfg.d_model), cos[1:3], sin[1:3], cache=cache)
+
+
 def test_attention_is_causal():
     torch.manual_seed(0)
     cfg = _small_cfg()
@@ -197,6 +210,98 @@ def test_generate_respects_eos():
     eos = greedy[0, 3].item()  # first generated token
     out = model.generate(prompt.clone(), max_new_tokens=10, temperature=0.0, eos_id=eos)
     assert out.shape[1] == 4  # stops immediately after emitting eos
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"max_new_tokens": -1}, "max_new_tokens"),
+        ({"temperature": -1.0}, "temperature"),
+        ({"temperature": float("nan")}, "temperature"),
+        ({"top_k": 0}, "top_k"),
+        ({"top_k": 1.5}, "top_k"),
+        ({"top_p": 0.0}, "top_p"),
+        ({"top_p": "0.9"}, "top_p"),
+        ({"top_p": 1.1}, "top_p"),
+        ({"eos_id": 256}, "eos_id"),
+    ],
+)
+def test_generate_rejects_invalid_controls(kwargs, message):
+    model = TinyLLM(_small_cfg())
+    prompt = torch.ones((1, 1), dtype=torch.long)
+    controls = dict(kwargs)
+    max_new_tokens = controls.pop("max_new_tokens", 1)
+    with pytest.raises(ValueError, match=message):
+        model.generate(prompt, max_new_tokens=max_new_tokens, **controls)
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        torch.ones((1, 1), dtype=torch.float32),
+        torch.tensor([[-1]], dtype=torch.long),
+        torch.tensor([[256]], dtype=torch.long),
+    ],
+)
+def test_generate_rejects_invalid_prompt_tokens(prompt):
+    with pytest.raises(ValueError, match="idx"):
+        TinyLLM(_small_cfg()).generate(prompt, max_new_tokens=1)
+
+
+def test_generate_zero_tokens_avoids_forward_and_preserves_mode():
+    model = TinyLLM(_small_cfg()).train()
+    prompt = torch.ones((1, 3), dtype=torch.long)
+    calls = 0
+
+    def count_calls(_module, _inputs, _output):
+        nonlocal calls
+        calls += 1
+
+    handle = model.register_forward_hook(count_calls)
+    out = model.generate(prompt, max_new_tokens=0)
+    handle.remove()
+    assert torch.equal(out, prompt)
+    assert calls == 0
+    assert model.training
+
+
+def test_generate_does_not_decode_after_final_token():
+    model = TinyLLM(_small_cfg()).eval()
+    prompt = torch.ones((1, 3), dtype=torch.long)
+    calls = 0
+
+    def count_calls(_module, _inputs, _output):
+        nonlocal calls
+        calls += 1
+
+    handle = model.register_forward_hook(count_calls)
+    model.generate(prompt, max_new_tokens=1, temperature=0.0)
+    handle.remove()
+    assert calls == 1  # prefill only; the sampled token needs no unused decode
+    assert not model.training
+
+
+def test_generate_tracks_eos_per_batch_row():
+    model = TinyLLM(_small_cfg()).eval()
+    calls = 0
+
+    def scripted_forward(self, idx, targets=None, cache=None):
+        nonlocal calls
+        logits = torch.full((2, 1, self.cfg.vocab_size), -100.0)
+        if calls == 0:
+            logits[0, 0, 7] = 100.0  # row 0 finishes immediately
+            logits[1, 0, 8] = 100.0
+        else:
+            logits[0, 0, 9] = 100.0  # must be replaced by EOS for finished row 0
+            logits[1, 0, 7] = 100.0  # row 1 now finishes
+        calls += 1
+        return logits, None
+
+    model.forward = types.MethodType(scripted_forward, model)
+    prompt = torch.ones((2, 1), dtype=torch.long)
+    out = model.generate(prompt, max_new_tokens=4, temperature=0.0, eos_id=7)
+    assert out.tolist() == [[1, 7, 7], [1, 8, 7]]
+    assert calls == 2
 
 
 def test_residual_projections_scaled_init():

@@ -21,26 +21,29 @@ Validation is a closure defined inside `run`, and every line of it matters:
 @torch.no_grad()
 def eval_val() -> float:
     model.eval()
-    losses = []
+    loss_sum = torch.zeros((), device=device)
     for k in range(tc.val_batches):
-        rng = np.random.default_rng([tc.seed, 999, k])
+        seed = [tc.seed, 999, k] if world == 1 else [tc.seed, 999, rank, k]
+        rng = np.random.default_rng(seed)
         x, y = val_data.sample_batch(tc.micro_batch_size, mc.seq_len, rng, device)
         with ctx:
             _, loss = model(x, targets=y)
-        losses.append(loss.item())
+        loss_sum += loss.detach()
     model.train()
-    return sum(losses) / len(losses)
+    local_mean = loss_sum / tc.val_batches
+    return _distributed_mean(local_mean, world).item()
 ```
 
-- **The batches are fixed.** The seed is `[tc.seed, 999, k]`: it depends on the
-  batch index `k` and nothing else. Not the step, not the rank, not the wall
-  clock. Every single evaluation, at every step, in every run with the same
-  `seed`, scores **the exact same crops of the validation split**. This is the
+- **The batches are fixed.** In one process the seed is `[tc.seed, 999, k]`; under
+  DDP it is `[tc.seed, 999, rank, k]`. It does not depend on the training step or
+  wall clock. Every evaluation in a run scores **the exact same per-rank crops of
+  the validation split**. This is the
   whole point: a val curve is only readable if the thing being measured does not
   move underneath it. If each eval drew fresh random crops, consecutive points
   would differ by sampling noise as well as by learning, and a 0.02 improvement
-  would be unreadable. The `999` is just a namespace constant keeping these draws
-  disjoint from the training stream's `[seed, rank, step, micro]`.
+  would be unreadable. The `999` is a namespace constant making these draws
+  independent from the training stream's `[seed, rank, step, micro]`; sampling
+  with replacement still permits chance overlap.
 - **`model.eval()` / `model.train()` bracket the call.** `tinyllm` has no dropout
   and no batchnorm, so this changes no math today; it is the correct habit, and
   it is what makes adding a stochastic layer later safe rather than silently
@@ -77,12 +80,11 @@ and because the sample is frozen by the seed, its bias is a constant offset that
 cancels out of every comparison you actually care about (step 249 vs step 19,072).
 
 <Callout type="info">
-  `eval_val()` is called on **every rank**, not just the master, and the result is
-  never all-reduced. That is not a bug: the val RNG deliberately excludes `rank`,
-  so all ranks score identical batches with identical (DDP-synchronized) weights
-  and compute the same number. Only the master prints and logs it. The cost is a
-  little redundant compute at 76 points in the run; the benefit is no collective
-  in the eval path.
+  `eval_val()` is called on **every rank**, not just the master. Under DDP the val
+  RNG includes `rank`, so each replica scores a different deterministic sample.
+  The local means are all-reduced into one global mean and only the master logs
+  it. This turns the parallel work into `world_size` times the validation
+  coverage instead of redundantly scoring identical crops.
 </Callout>
 
 ### Reading the number

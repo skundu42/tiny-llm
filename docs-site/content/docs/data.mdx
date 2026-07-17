@@ -206,16 +206,16 @@ and nothing carries over from one step to the next. Four consequences fall out:
   something frameworks often get subtly wrong or skip entirely.
 
 - **Each rank sees different data, deterministically.** Because `rank` is in the
-  seed, the eight replicas of a data-parallel run draw eight disjoint sets of
-  crops in the same step, so the global batch is `world × micro_batch_size ×
-  grad_accum` distinct crops with no cross-rank duplication, and it is still
-  perfectly reproducible.
+  seed, the eight replicas of a data-parallel run make independent deterministic
+  draws. Sampling is with replacement, so rare cross-rank overlaps are possible;
+  the global batch still has `world × micro_batch_size × grad_accum` crops and is
+  perfectly reproducible for a fixed world size.
 
-- **Validation lives in its own namespace.** Evaluation seeds with a fixed
-  constant in the rank slot, `np.random.default_rng([tc.seed, 999, k])`, so the
-  validation crops are a fixed set that never collides with any training stream
-  and stays constant across evaluations, making val-loss comparisons apples to
-  apples.
+- **Validation lives in its own namespace.** Single-process evaluation seeds as
+  `np.random.default_rng([tc.seed, 999, k])`; DDP additionally includes `rank`.
+  The validation sample stays constant across evaluations, making val-loss
+  comparisons apples to apples. Seed separation makes it independent of the
+  training draws, though random crops can still coincide by chance.
 
 - **One caveat: the world size is baked in.** Because `rank` and `grad_accum`
   shape which crops are drawn, resuming on a *different* number of GPUs changes

@@ -42,16 +42,18 @@ if ddp:
 The data-parallel contract is: **replicate the model, split the data**. Every
 rank runs the identical model on a *different* slice of the global batch:
 different because the sampler seeds on `rank` (`np.random.default_rng([tc.seed,
-rank, step, micro])`), so the ranks draw disjoint crops with no coordination (see
-[Data](/docs/data)). During `backward`, DDP hooks fire an **all-reduce** that
+rank, step, micro])`), so the ranks make independent deterministic draws (see
+[Data](/docs/data)). Sampling is with replacement, so two ranks can occasionally
+overlap. During `backward`, DDP hooks fire an **all-reduce** that
 averages each gradient across all ranks, so after backward every replica holds
 the same mean gradient, applies the same optimizer step, and the replicas stay
 bit-identical without ever exchanging weights; only gradients cross the wire.
 
 One rank (`master = rank == 0`) owns the side effects: it prints, writes
 `log.csv`, drives Weights & Biases, and saves checkpoints. The others just
-compute. Since DDP keeps every replica in lockstep, rank 0's copy is a faithful
-snapshot of the whole run.
+compute. Since DDP keeps every replica in lockstep, rank 0's weights are a
+faithful snapshot of the whole run. Scalar train and validation losses are
+all-reduced before rank 0 logs them, so the metrics describe every rank.
 
 ## `no_sync` during accumulation
 
@@ -106,10 +108,10 @@ torchrun --standalone --nproc_per_node=8 -m tinyllm.train --config d26
 Now `world = 8` and `grad_accum` drops to `4`, but `batch_tokens` is still
 524,288: the [grad-accumulation identity](/docs/training) holds the
 effective batch constant while the eight ranks share the work. Multi-node runs
-are the same picture with `torchrun`'s rendezvous arguments across hosts. Because
-the effective batch, the schedule, and the per-`(rank, step)` data are all
-pinned, scaling out changes throughput and `grad_accum` but not the loss curve
-(modulo bf16 kernel non-determinism).
+are the same picture with `torchrun`'s rendezvous arguments across hosts. The
+effective batch size and schedule stay fixed, but changing world size changes the
+set of `(rank, micro)` seeds and therefore the exact crops. The loss curves should
+be statistically comparable, not bit-identical.
 
 ## Why not FSDP at half a billion parameters
 

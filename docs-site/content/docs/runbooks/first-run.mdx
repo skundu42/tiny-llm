@@ -34,7 +34,7 @@ or any machine-learning background.
 |---|---|---|
 | 1. Install the tools | `git` and `uv` | a few minutes |
 | 2. Get the code | clone the repo, install dependencies | a few minutes |
-| 3. Prove the install | run the 58-test suite | seconds |
+| 3. Prove the install | run the 100-test suite | seconds |
 | 4. The tokenizer | nothing; it ships with the repo | zero |
 | 5. Prepare the data | stream text, encode it into token shards | minutes, mostly download |
 | 6. Train | 600 optimization steps | ~15 min on Apple Silicon, longer on CPU |
@@ -112,7 +112,7 @@ uv run pytest -q
 Expected output, after a few seconds:
 
 ```
-58 passed in ...s
+100 passed in ...s
 ```
 
 This is not a formality. The suite checks every component against independently

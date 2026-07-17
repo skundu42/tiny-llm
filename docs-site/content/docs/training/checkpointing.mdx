@@ -74,7 +74,9 @@ Resume reads them straight back:
 
 ```python
 if resume:
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
+    if ckpt.get("model_cfg") != asdict(mc):
+        raise ValueError("checkpoint model config does not match the requested model config")
     raw_model.load_state_dict(ckpt["model"])
     for opt, sd in zip(optimizers, ckpt["optimizers"]):
         opt.load_state_dict(sd)
@@ -113,7 +115,7 @@ def test_resume_is_bit_exact(tmp_path):
     mcfg, tcfg = _micro_cfgs(tmp_path, steps=10)
 
     run(mcfg, tcfg, device="cpu")
-    full = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+    full = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=True)
 
     import shutil
     shutil.rmtree(tmp_path / "out")
@@ -121,7 +123,7 @@ def test_resume_is_bit_exact(tmp_path):
     run(mcfg2, tcfg2, device="cpu")
     mcfg3, tcfg3 = _micro_cfgs(tmp_path, steps=10)
     run(mcfg3, tcfg3, device="cpu", resume=True)
-    resumed = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+    resumed = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=True)
 
     assert full["step"] == resumed["step"] == 10
     for k in full["model"]:

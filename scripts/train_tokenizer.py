@@ -17,7 +17,7 @@ def main() -> None:
     p.add_argument("--out", default="tokenizer/tokenizer.json")
     p.add_argument("--max-bytes", type=int, default=250_000_000)
     p.add_argument("--vocab-size", type=int, default=32768)
-    p.add_argument("--num-proc", type=int, default=max(1, os.cpu_count() - 2))
+    p.add_argument("--num-proc", type=int, default=max(1, (os.cpu_count() or 1) - 2))
     p.add_argument("--min-word-freq", type=int, default=2)
     p.add_argument("--dataset", default="HuggingFaceFW/fineweb-edu",
                    help="HuggingFace dataset repo id")
@@ -27,6 +27,14 @@ def main() -> None:
     p.add_argument("--text-key", default="text",
                    help="column holding the document text")
     args = p.parse_args()
+    if not 257 <= args.vocab_size <= 65_536:
+        p.error("--vocab-size must be between 257 and 65536 for uint16 shards")
+    if args.max_bytes <= 0:
+        p.error("--max-bytes must be positive")
+    if args.num_proc <= 0:
+        p.error("--num-proc must be positive")
+    if args.min_word_freq <= 0:
+        p.error("--min-word-freq must be positive")
 
     ds = load_dataset(args.dataset, name=args.dataset_config or None,
                       split=args.split, streaming=True)
@@ -46,14 +54,19 @@ def main() -> None:
     tok = BPETokenizer.train(texts(), vocab_size=args.vocab_size,
                              num_proc=args.num_proc,
                              min_word_freq=args.min_word_freq, verbose=True)
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    parent = os.path.dirname(args.out)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     tok.save(args.out)
     print(f"saved {args.out}")
 
     holdout = [ex[args.text_key] for ex in itertools.islice(it, 100)]
     nbytes = sum(len(t.encode("utf-8")) for t in holdout)
     ntok = sum(len(tok.encode(t)) for t in holdout)
-    print(f"compression on holdout: {nbytes / ntok:.3f} bytes/token")
+    if ntok:
+        print(f"compression on holdout: {nbytes / ntok:.3f} bytes/token")
+    else:
+        print("compression on holdout: unavailable (holdout produced no tokens)")
 
 
 if __name__ == "__main__":
