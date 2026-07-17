@@ -125,10 +125,11 @@ fp32).
 Right before stepping, the global gradient is clipped to unit L2 norm:
 
 ```python
-torch.nn.utils.clip_grad_norm_(raw_model.parameters(), tc.grad_clip)  # grad_clip = 1.0
+torch.nn.utils.clip_grad_norm_(raw_model.parameters(), tc.grad_clip)
 ```
 
-This is a standard stability guard. Pretraining occasionally hits a batch that
+`grad_clip` defaults to `1.0`, so the global gradient norm is capped at one. This
+is a standard stability guard. Pretraining occasionally hits a batch that
 produces an outsized gradient — a loss spike — and without clipping a single such
 step can blow the weights far enough to derail the run. Clipping the *global*
 norm (across all parameters jointly, so their relative directions are preserved)

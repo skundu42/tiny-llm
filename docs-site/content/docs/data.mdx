@@ -128,7 +128,8 @@ in flight," not "the whole corpus."
 `sample_batch` draws a batch of crops:
 
 ```python
-def sample_batch(self, batch_size, seq_len, rng, device="cpu"):
+def sample_batch(self, batch_size: int, seq_len: int, rng: np.random.Generator,
+                 device: str | torch.device = "cpu"):
     usable = self.sizes - (seq_len + 1)
     positions = np.clip(usable + 1, 0, None)  # count of valid crop offsets per shard
     assert positions.sum() > 0, "no shard is long enough for this seq_len"

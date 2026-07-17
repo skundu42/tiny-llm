@@ -122,6 +122,11 @@ bottleneck of data prep. So `export_fast` builds an equivalent Rust-backed
 
 ```python
 def export_fast(self):
+    """Build a HF `tokenizers.Tokenizer` with identical merges.
+
+    Used only to accelerate bulk corpus encoding; call verify_fast on a
+    sample before trusting it. Our pure-Python encoder is ground truth.
+    """
     from tokenizers import Regex, Tokenizer, decoders, models, pre_tokenizers
 
     b2u = _bytes_to_unicode()
