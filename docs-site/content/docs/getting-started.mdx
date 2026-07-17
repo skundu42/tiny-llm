@@ -68,14 +68,31 @@ compressing held-out documents at **4.517 bytes/token**. See
 
 ```bash
 uv run python scripts/prepare_data.py --data-dir data/smoke \
-    --max-tokens 20_000_000 --val-tokens 1_000_000 --shard-tokens 20_000_000
+    --max-tokens 60000000 --val-tokens 2000000 --shard-tokens 25000000
 ```
 
-This streams FineWeb-Edu, encodes it with the tokenizer, and writes uint16 token
-shards plus a JSON index. The recorded smoke corpus came out at **60,003,098
-tokens across 5 shards** — 2,004,611 validation and 57,998,487 train. (Token
-counts land above the `--max-tokens` request because the writer finishes the
-document it is in rather than truncating mid-document.) Details in
+This is the exact command that produced the corpus every number on this page was
+measured against. It streams FineWeb-Edu, encodes it with the tokenizer
+(`--tokenizer` defaults to `tokenizer/tokenizer.json`), and writes uint16 token
+shards plus a JSON index — validation shards filled first, then train.
+
+The recorded result: **60,003,098 tokens across 5 shards**, 2,004,611 validation
+and 57,998,487 train.
+
+| Split | Shard | Tokens |
+|---|---|---|
+| val | `val_00000.bin` | 2,000,000 |
+| val | `val_00001.bin` | 4,611 |
+| train | `train_00000.bin` | 25,000,000 |
+| train | `train_00001.bin` | 25,000,000 |
+| train | `train_00002.bin` | 7,998,487 |
+
+You can read the flags straight off that table. `--val-tokens 2000000` fills
+`val_00000.bin` to exactly 2,000,000; `--shard-tokens 25000000` caps each shard
+at 25M, so train rolls over twice; `--max-tokens 60000000` stops the stream at
+60M. The small overshoots — 4,611 val tokens spilling into a second shard, and
+60,003,098 total against a 60,000,000 request — are the writer finishing the
+document it is in rather than truncating mid-document. Details in
 [Data](/docs/data).
 
 ## Train
@@ -132,9 +149,9 @@ split: under a fifth of an epoch, so no example is ever seen twice and train and
 val are equally unfamiliar. That curve is the real deliverable: the loop, the sampler, the
 optimizer split, and the LR schedule are all wired up correctly.
 
-At this size on this little data the model is nowhere near producing coherent
-text — the point of the smoke run is that **every component works end to end**,
-not that the result is good.
+The point of the smoke run is that **every component works end to end**, not that
+the result is good — though at 13M params it does learn real English. See the
+samples below.
 
 <Callout type="info">
   Loss is a per-token cross-entropy in nats. 5.50 nats ≈ a perplexity of ~245
@@ -146,8 +163,29 @@ not that the result is good.
 
 ```bash
 uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt \
-    --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"
+    --tokenizer tokenizer/tokenizer.json --prompt "The" --seed 1
 ```
+
+Real output from the finished 600-step smoke checkpoint:
+
+> The 'the last in the first years of the past was the most common in the world.
+> The best way to be the most diverse and highly difficult, while there was a lot
+> of the most important for future lives. In a very high level of work, the
+> world's most important is the same as
+
+And with `--prompt "Photosynthesis is" --seed 2`:
+
+> Photosynthesis is a problem that has been published as a new disease in the
+> past 20 years. There are also some studies, which are called "A disease" and is
+> found on these problems in people by the first 20 years in the United States.
+> The most common number of people is about 1.
+
+This is a fair picture of what 13.1M parameters and ~9.8M tokens buys. The model
+has learned **English morphology, syntax, punctuation, and quotation formatting**
+— these are grammatical, fluent sentences, not word salad. It has **not** learned
+factual grounding: photosynthesis is not a disease. That split is exactly what
+this scale and token budget predict, and it is why the real run is
+[489M parameters over 10B tokens](/docs/architecture) rather than this.
 
 ## Scaling up to the real run
 
