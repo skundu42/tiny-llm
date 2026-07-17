@@ -1,0 +1,4 @@
+{
+  "title": "API reference",
+  "pages": ["index", "config", "model", "tokenizer", "data", "muon", "train", "sample-and-eval"]
+}

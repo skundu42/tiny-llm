@@ -1,0 +1,353 @@
+---
+title: tinyllm.model
+description: RMSNorm, RoPE, KVCache, Attention, SwiGLU, Block and TinyLLM — exact signatures, shapes, and usage
+---
+
+The whole transformer in 218 lines: `tinyllm/model.py`. Pre-norm RMSNorm, RoPE,
+grouped-query attention with QK-norm, SwiGLU, tied embeddings, **no biases
+anywhere**. [Architecture](/docs/architecture) explains the design; this page is
+the signature reference.
+
+## `RMSNorm`
+
+```python
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6) -> None:
+        ...
+```
+
+**Args:** `dim` — size of the normalized (last) dimension; `eps` — added inside
+the `rsqrt` for numerical stability.
+
+**Parameters:** `weight`, shape `(dim,)`, initialized to **ones**. No bias.
+
+```python
+def forward(self, x: torch.Tensor) -> torch.Tensor:
+    dtype = x.dtype
+    x = x.float()
+    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+    return (x * self.weight.float()).to(dtype)
+```
+
+**Args:** `x` — any shape; normalization is over the **last** dimension.
+**Returns:** same shape and **same dtype** as `x`.
+
+The upcast to `float()` and the cast back are the point: the reduction runs in
+fp32 even under bf16 autocast, then the result returns to the input's dtype. See
+[RMSNorm](/docs/architecture/rmsnorm).
+
+```python
+import torch
+
+from tinyllm.model import RMSNorm
+
+norm = RMSNorm(64)
+x = torch.randn(2, 10, 64)
+y = norm(x)
+assert y.shape == x.shape
+assert torch.allclose(y.pow(2).mean(-1), torch.ones(2, 10), atol=1e-5)  # unit RMS
+```
+
+## `precompute_rope`
+
+```python
+def precompute_rope(
+    head_dim: int, max_seq_len: int, theta: float, device: torch.device | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cos/sin tables, each (max_seq_len, head_dim // 2), float32."""
+```
+
+**Args:** `head_dim` — per-head width (rotation is over `head_dim // 2` pairs);
+`max_seq_len` — number of positions to tabulate; `theta` — base frequency
+(`rope_theta`, `10000.0`); `device` — optional.
+
+**Returns:** `(cos, sin)`, each `(max_seq_len, head_dim // 2)`, **float32**.
+
+Called once in `TinyLLM.__init__` and registered as **non-persistent** buffers
+(`persistent=False`), so the tables are recomputed on load rather than stored in
+the checkpoint. This is why `max_seq_len` here fixes the hard generation ceiling —
+there is no table row for position `seq_len`.
+
+## `apply_rope`
+
+```python
+def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Rotate (B, H, T, head_dim) by the tables' T positions (NeoX half-split)."""
+```
+
+**Args:** `x` — `(B, H, T, head_dim)`; `cos`, `sin` — `(T, head_dim // 2)` slices
+of the precomputed tables, **already sliced to the positions `x` occupies**.
+
+**Returns:** `(B, H, T, head_dim)`, same dtype as `x`.
+
+NeoX half-split convention: `x` is split into halves rather than interleaved
+even/odd pairs. The caller owns the position offset — during decode,
+`TinyLLM.forward` slices `rope_cos[pos0 : pos0 + T]`, which is what keeps a cached
+key's rotation tied to its absolute position. See [RoPE](/docs/architecture/rope).
+
+```python
+import torch
+
+from tinyllm.model import apply_rope, precompute_rope
+
+cos, sin = precompute_rope(64, 2048, 10000.0)
+q = torch.randn(1, 20, 10, 64)
+q_rot = apply_rope(q, cos[:10], sin[:10])           # positions 0..9
+q_at_100 = apply_rope(q, cos[100:110], sin[100:110])  # positions 100..109
+assert torch.allclose(q.norm(dim=-1), q_rot.norm(dim=-1), atol=1e-5)  # rotation
+```
+
+## `KVCache`
+
+```python
+class KVCache:
+    """Preallocated per-layer K/V cache for autoregressive decoding. Usage
+    contract: one multi-token prefill from an empty cache (pos == 0), then
+    exactly one token per forward call. A multi-token forward with pos > 0
+    would attend without any causal mask and leak future tokens within the
+    chunk; Attention asserts against it.
+    """
+
+    def __init__(self, n_layer, batch_size, n_kv_head, max_seq_len, head_dim, device, dtype):
+        ...
+```
+
+A plain class — not an `nn.Module`.
+
+**Args (all positional in practice):** `n_layer`, `batch_size`, `n_kv_head`,
+`max_seq_len` (positions to preallocate — `prompt + max_new_tokens`, not
+necessarily `cfg.seq_len`), `head_dim`, `device`, `dtype`.
+
+**Attributes:** `k`, `v` — each `(n_layer, batch_size, n_kv_head, max_seq_len,
+head_dim)`, zero-filled; `pos` — `int`, the number of positions written so far.
+
+**Memory:** `2 × n_layer × batch × n_kv_head × max_seq_len × head_dim ×
+itemsize`. For `d26` at full context, batch 1, bf16: **52 MiB**. See the
+[memory math](/docs/inference#kv-cache-memory).
+
+### `update`
+
+```python
+def update(self, layer: int, k: torch.Tensor, v: torch.Tensor):
+    t = k.size(2)
+    self.k[layer, :, :, self.pos : self.pos + t] = k
+    self.v[layer, :, :, self.pos : self.pos + t] = v
+    return self.k[layer, :, :, : self.pos + t], self.v[layer, :, :, : self.pos + t]
+```
+
+**Args:** `layer` — layer index; `k`, `v` — `(B, n_kv_head, t, head_dim)`, new
+keys/values **already RoPE'd and QK-normed**.
+
+**Returns:** `(k_all, v_all)` — **views** of the cache from 0 to `pos + t`, shape
+`(B, n_kv_head, pos + t, head_dim)`. No copy, no `cat`.
+
+Does **not** advance `pos` — every layer writes at the same offset.
+
+### `advance`
+
+```python
+def advance(self, t: int) -> None:
+    self.pos += t
+```
+
+**Args:** `t` — positions consumed. **Returns:** `None`.
+
+Called **once per forward** by `TinyLLM.forward`, after all blocks have written —
+never per layer.
+
+<Callout type="warn">
+  **The contract is asserted, not merely documented.** Exactly two call patterns
+  are legal: one multi-token prefill from `pos == 0`, then one token per forward.
+  A multi-token forward against a non-empty cache would attend with **no causal
+  mask** and leak the future — see
+  [why chunked prefill would leak](/docs/inference#why-chunked-prefill-would-leak-the-future).
+</Callout>
+
+## `Attention`
+
+```python
+class Attention(nn.Module):
+    def __init__(self, cfg: ModelConfig, layer_idx: int) -> None:
+        ...
+```
+
+**Args:** `cfg` — a `ModelConfig`; `layer_idx` — **which slot of the shared
+`KVCache` this layer writes to**. Not decorative: it is the cache index.
+
+**Submodules:** `wq` `(d_model → n_head × head_dim)`, `wk`/`wv` `(d_model →
+n_kv_head × head_dim)`, `wo` `(n_head × head_dim → d_model)` — all `bias=False`;
+`q_norm`, `k_norm` — `RMSNorm(head_dim)`.
+
+```python
+def forward(self, x, cos, sin, cache: "KVCache | None" = None) -> torch.Tensor:
+    ...
+```
+
+**Args:** `x` — `(B, T, d_model)`; `cos`, `sin` — `(T, head_dim // 2)` sliced to
+`x`'s absolute positions; `cache` — optional `KVCache`.
+
+**Returns:** `(B, T, d_model)`.
+
+**Raises:** `AssertionError` if `cache is not None and T > 1 and cache.pos > 0`.
+
+Order of operations: project → split heads → **QK-norm** → **RoPE** → cache update
+→ repeat KV heads → SDPA → merge → `wo`. `is_causal` is derived as `q.size(2) ==
+k.size(2)`. See [Attention](/docs/architecture/attention).
+
+## `SwiGLU`
+
+```python
+class SwiGLU(nn.Module):
+    def __init__(self, cfg: ModelConfig) -> None:
+        ...
+```
+
+**Submodules:** `w_gate`, `w_up` `(d_model → d_ff)`; `w_down` `(d_ff → d_model)` —
+all `bias=False`. **Three** matrices, not two.
+
+```python
+def forward(self, x: torch.Tensor) -> torch.Tensor:
+    return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))
+```
+
+**Args:** `x` — `(B, T, d_model)`. **Returns:** `(B, T, d_model)`.
+
+The gate is elementwise: `SiLU(x W_gate) ⊙ (x W_up)`. See
+[SwiGLU](/docs/architecture/swiglu).
+
+## `Block`
+
+```python
+class Block(nn.Module):
+    def __init__(self, cfg: ModelConfig, layer_idx: int) -> None:
+        ...
+```
+
+**Submodules:** `attn_norm`, `attn`, `mlp_norm`, `mlp`.
+
+```python
+def forward(self, x, cos, sin, cache: KVCache | None = None) -> torch.Tensor:
+    x = x + self.attn(self.attn_norm(x), cos, sin, cache)
+    x = x + self.mlp(self.mlp_norm(x))
+    return x
+```
+
+**Args:** `x` — `(B, T, d_model)`; `cos`, `sin`; `cache`. **Returns:** `(B, T,
+d_model)`.
+
+**Pre-norm**: the norm is applied to the *input* of each sublayer, and the residual
+carries the un-normalized stream — so there is a clean identity path from
+embedding to output.
+
+## `TinyLLM`
+
+```python
+class TinyLLM(nn.Module):
+    def __init__(self, cfg: ModelConfig) -> None:
+        ...
+```
+
+**Args:** `cfg` — a `ModelConfig`, stored as `self.cfg`.
+
+**Attributes:** `embed` — `nn.Embedding(vocab_size, d_model)`; `blocks` —
+`ModuleList` of `n_layer` `Block`s; `final_norm` — `RMSNorm(d_model)`; `lm_head` —
+`nn.Linear(d_model, vocab_size, bias=False)` **with `weight` tied to
+`embed.weight`**; `rope_cos`, `rope_sin` — non-persistent buffers.
+
+**Initialization:** `normal_(std=0.02)` on every `Linear`/`Embedding`, then `wo`
+and `w_down` in every block are re-initialized to `std = 0.02 / sqrt(2 × n_layer)`
+— the residual scaling that keeps the stream's variance from growing with depth.
+See [Embeddings and init](/docs/architecture/embeddings-and-init).
+
+### `num_params`
+
+```python
+def num_params(self, non_embedding: bool = False) -> int:
+    n = sum(p.numel() for p in self.parameters())
+    if non_embedding:
+        n -= self.embed.weight.numel()
+    return n
+```
+
+**Args:** `non_embedding` — subtract the embedding's parameters.
+**Returns:** `int`.
+
+Because `lm_head.weight` **is** `embed.weight`, `parameters()` deduplicates the
+shared storage and counts it once. For `d26`: `num_params()` = **489,297,408**,
+`num_params(non_embedding=True)` = **447,354,368**.
+
+### `forward`
+
+```python
+def forward(self, idx, targets=None, cache: KVCache | None = None):
+    ...
+```
+
+**Args:** `idx` — `(B, T)` `int64` token ids; `targets` — optional `(B, T)` ids,
+`-1` is ignored by the loss; `cache` — optional `KVCache`.
+
+**Returns:** `(logits, loss)`, in **three shapes** depending on the mode:
+
+| Mode | `logits` | `loss` |
+|---|---|---|
+| `targets` given | `(B, T, vocab_size)` | scalar cross-entropy |
+| `cache` given, no targets | `(B, 1, vocab_size)` — **last position only** | `None` |
+| Neither | `(B, T, vocab_size)` | `None` |
+
+The middle row is the [prefill shortcut](/docs/inference#the-prefill-logits-shortcut):
+with a cache, only the final position is projected through `lm_head`, since it is
+the only distribution generation needs.
+
+**Position handling:** `pos0 = cache.pos if cache is not None else 0`, and the RoPE
+tables are sliced `[pos0 : pos0 + T]`. `cache.advance(T)` is called after the
+blocks. The loss is computed on `logits.float()` — fp32 regardless of autocast.
+
+### `generate`
+
+```python
+@torch.no_grad()
+def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, eos_id=None):
+    ...
+```
+
+**Args:**
+
+| Arg | Default | Meaning |
+|---|---|---|
+| `idx` | — | `(B, T)` prompt token ids |
+| `max_new_tokens` | — | Tokens to generate |
+| `temperature` | `1.0` | `0.0` → greedy `argmax` (ignores `top_k`/`top_p`) |
+| `top_k` | `None` | Keep the `k` highest logits |
+| `top_p` | `None` | Nucleus threshold, applied **after** `top_k` |
+| `eos_id` | `None` | Stop when **all** batch rows emit it |
+
+**Returns:** `(B, T + n)` — the **full** sequence, prompt included, where `n ≤
+max_new_tokens`.
+
+**Raises:** `AssertionError` if `T + max_new_tokens > cfg.seq_len`.
+
+Allocates a `KVCache` sized exactly `T + max_new_tokens` with
+`dtype=self.embed.weight.dtype`, prefills the prompt, then decodes one token per
+step. Calls `self.eval()` internally. See [Inference](/docs/inference) for the
+sampling order and the `.all()` batch caveat.
+
+```python
+import torch
+
+from tinyllm import BPETokenizer, ModelConfig, TinyLLM
+
+cfg = ModelConfig(n_layer=2, n_head=4, n_kv_head=2, d_model=128, d_ff=256, seq_len=128)
+model = TinyLLM(cfg)
+print(f"{model.num_params():,}")
+
+# training-style forward
+idx = torch.randint(0, cfg.vocab_size, (2, 16))
+logits, loss = model(idx[:, :-1], targets=idx[:, 1:])
+print(logits.shape, loss.item())        # torch.Size([2, 15, 32768]) ~10.4
+
+# generation
+tok = BPETokenizer.load("tokenizer/tokenizer.json")
+ids = torch.tensor([[tok.eot_id] + tok.encode("The")])
+out = model.generate(ids, 20, temperature=0.8, top_k=50, eos_id=tok.eot_id)
+print(tok.decode(out[0].tolist()[1:]))
+```

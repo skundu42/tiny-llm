@@ -1,0 +1,264 @@
+---
+title: tinyllm.data
+description: ShardWriter and TokenShards — the uint16 shard format, memmapped random-crop sampling, and the prepare_data CLI
+---
+
+100 lines: `tinyllm/data.py`. One class writes token ids into fixed-size uint16
+`.bin` shards, another memory-maps them back and samples random crops. No
+`DataLoader`, no workers, no collate function. See [Data](/docs/data) for the
+design.
+
+## `INDEX_NAME`
+
+```python
+INDEX_NAME = "index.json"
+```
+
+**Type:** `str`. The manifest filename inside every data directory. Its shape:
+
+```json
+{
+ "dtype": "uint16",
+ "splits": {
+  "val":   [{"file": "val_00000.bin", "tokens": 2000000}],
+  "train": [{"file": "train_00000.bin", "tokens": 25000000}]
+ }
+}
+```
+
+## `ShardWriter`
+
+```python
+class ShardWriter:
+    """Append token ids into fixed-size uint16 .bin shards plus index.json.
+
+    total_written counts tokens accepted by write(); they reach disk only at close().
+    Re-opening an existing split raises.
+    """
+
+    def __init__(self, out_dir: str, split: str, shard_tokens: int) -> None:
+        ...
+```
+
+**Args:** `out_dir` — created if missing; `split` — `"train"` / `"val"`, used as
+the filename prefix and the index key; `shard_tokens` — tokens per shard.
+
+**Raises:** `ValueError` if `out_dir`'s `index.json` already lists a non-empty
+`split` — *"already contains a 'train' split; use a fresh directory"*.
+
+**Attributes:** `total_written` — tokens accepted by `write()`; `entries` — shard
+records so far; `buffer`, `fill` — the in-memory shard being filled.
+
+That guard is the useful part. Shard writing is append-only and an interrupted
+run leaves a partial `index.json`; silently appending to it would interleave two
+corpora in one split with no way to tell. It fails loudly instead.
+
+<Callout type="warn">
+  **`total_written` counts tokens *accepted*, not tokens on disk.** The final
+  partial shard lives in memory until `close()`. Skipping `close()` loses up to
+  `shard_tokens` tokens **and** never writes `index.json`, leaving the directory
+  unreadable by `TokenShards`.
+</Callout>
+
+### `write`
+
+```python
+def write(self, ids: Sequence[int]) -> None:
+    arr = np.asarray(ids, dtype=np.uint16)
+    self.total_written += len(arr)
+    while len(arr) > 0:
+        n = min(len(arr), self.shard_tokens - self.fill)
+        self.buffer[self.fill : self.fill + n] = arr[:n]
+        self.fill += n
+        arr = arr[n:]
+        if self.fill == self.shard_tokens:
+            self._flush()
+```
+
+**Args:** `ids` — any sequence of ints, **any length**. **Returns:** `None`.
+
+The `while` loop is what makes the caller's life simple: a document longer than a
+shard is split across as many as it needs, and **documents are never padded or
+truncated to shard boundaries**. Shards are a storage detail, not a semantic one —
+a document can straddle two, and the sampler does not care.
+
+`np.uint16` caps the vocabulary at **65,536**. At 32,768 we use half the range and
+each token costs **2 bytes** — 10B tokens = ~19 GiB rather than the ~37 GiB
+`int32` would need.
+
+### `close`
+
+```python
+def close(self) -> None:
+    ...
+```
+
+**Args:** none. **Returns:** `None`.
+
+Flushes the partial shard, then merges this split's entries into `index.json`,
+**preserving other splits** (it re-reads the file first) and writing via
+`tmp` + `os.replace` so the index is never observed half-written.
+
+**Always call it** — the last shard and the entire index depend on it.
+
+```python
+from tinyllm.data import ShardWriter
+
+w = ShardWriter("data/demo", "train", shard_tokens=1000)
+w.write([1, 2, 3])
+w.write(list(range(5000)))     # spans multiple shards automatically
+print(w.total_written)         # 5003
+w.close()                      # flushes the tail + writes index.json
+```
+
+## `TokenShards`
+
+```python
+class TokenShards:
+    """Memmapped random-crop sampler over the shards of one split."""
+
+    def __init__(self, data_dir: str, split: str) -> None:
+        ...
+```
+
+**Args:** `data_dir` — directory containing `index.json`; `split` — key to load.
+
+**Raises:** `FileNotFoundError` if no index; `KeyError` if the split is absent.
+
+**Attributes:** `shards` — a `list[np.memmap]`, one per `.bin`; `sizes` —
+`np.ndarray[int64]` of token counts; `total_tokens` — `int`, their sum.
+
+`np.memmap` is the reason there is no `DataLoader`. The shards are **never read
+into RAM** — the OS page cache serves the crops on demand, so a 19 GiB corpus opens
+instantly at near-zero memory and the hot pages stay cached. Sampling is fast
+enough inline that a background worker would be pure overhead.
+
+### `sample_batch`
+
+```python
+def sample_batch(self, batch_size: int, seq_len: int, rng: np.random.Generator,
+                 device: str | torch.device = "cpu"):
+    usable = self.sizes - (seq_len + 1)
+    positions = np.clip(usable + 1, 0, None)  # count of valid crop offsets per shard
+    assert positions.sum() > 0, "no shard is long enough for this seq_len"
+    p = positions.astype(np.float64) / positions.sum()
+    shard_ids = rng.choice(len(self.shards), size=batch_size, p=p)
+    xs = np.empty((batch_size, seq_len + 1), dtype=np.int64)
+    for i, si in enumerate(shard_ids):
+        off = int(rng.integers(0, positions[si]))
+        xs[i] = self.shards[si][off : off + seq_len + 1].astype(np.int64)
+    t = torch.from_numpy(xs)
+    x, y = t[:, :-1].contiguous(), t[:, 1:].contiguous()
+    if str(device) != "cpu":
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
+    return x, y
+```
+
+**Args:** `batch_size` — sequences; `seq_len` — tokens per sequence; `rng` — a
+`np.random.Generator`, **supplied by the caller**; `device`.
+
+**Returns:** `(x, y)`, each `(batch_size, seq_len)` `int64`, where `y` is `x`
+shifted one position — the next-token targets.
+
+**Raises:** `AssertionError` if no shard can fit `seq_len + 1`.
+
+Four things worth knowing:
+
+- **`seq_len + 1` tokens are read, then split.** One crop yields both input and
+  target; `x[i]` predicts `y[i]` at every position, so every token in the batch is
+  a training signal.
+- **Shards are weighted by usable crop count**, not uniformly — `p = positions /
+  positions.sum()`. Without it, `smoke`'s 7,998,487-token tail shard would be drawn
+  as often as a 25,000,000-token one and its tokens would be oversampled ~3×. This
+  makes the sample **uniform over positions**, which is what "random crop over the
+  corpus" should mean.
+- **The RNG is a parameter, not state.** The caller builds a fresh
+  `np.random.default_rng([seed, rank, step, micro])` per call, so a batch is a pure
+  function of its coordinates. This is what makes [resume](/docs/training/checkpointing)
+  bit-exact and DDP ranks disjoint — no generator state to checkpoint.
+- **Crops can straddle document boundaries**, and that is deliberate — the
+  `<|endoftext|>` between documents teaches the model where they end.
+
+```python
+import numpy as np
+
+from tinyllm.data import TokenShards
+
+data = TokenShards("data/smoke", "train")
+print(f"{data.total_tokens:,}")                  # 57,998,487
+
+rng = np.random.default_rng([1337, 0, 0, 0])
+x, y = data.sample_batch(8, 512, rng)
+print(x.shape, y.shape)                          # (8, 512) (8, 512)
+assert (x[:, 1:] == y[:, :-1]).all()             # y is x shifted by one
+
+# same coordinates => byte-identical batch
+x2, _ = data.sample_batch(8, 512, np.random.default_rng([1337, 0, 0, 0]))
+assert (x == x2).all()
+```
+
+## `scripts/prepare_data.py`
+
+```bash
+uv run python scripts/prepare_data.py
+```
+
+Streams FineWeb-Edu `sample-10BT`, encodes it with the **verified** fast
+tokenizer, and writes shards. The defaults are the `d26` configuration.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--tokenizer` | `tokenizer/tokenizer.json` | Tokenizer to encode with |
+| `--data-dir` | `data/fineweb-edu` | Output directory |
+| `--val-tokens` | `10_000_000` | Tokens routed to validation **first** |
+| `--shard-tokens` | `100_000_000` | Tokens per shard |
+| `--max-tokens` | `0` | `0` = the entire subset |
+| `--slow` | off | Use the pure-Python encoder instead of the fast one |
+
+Three mechanics worth reading in source:
+
+**Verification before encoding.** The fast tokenizer is checked against the
+ground-truth encoder on the first 200 documents, which are then chained back so
+none are lost:
+
+```python
+fast = tok.export_fast()
+sample = list(itertools.islice(docs, 200))
+tok.verify_fast(fast, sample)
+print("fast tokenizer verified token-identical on 200 docs")
+docs = itertools.chain(sample, docs)
+```
+
+**The val/train router.** Validation fills first; everything after goes to train —
+so the splits are **disjoint by construction** and no document spans both:
+
+```python
+for ids in encs:
+    ids.append(eot)
+    w = val_w if val_w.total_written < args.val_tokens else train_w
+    w.write(ids)
+    total += len(ids)
+```
+
+Note `ids.append(eot)` — **every document is terminated with `<|endoftext|>`**,
+which is the token that teaches the model where documents end and is why
+[`tinyllm.sample`](/docs/api/sample-and-eval#main) prefixes prompts with it.
+
+**Val shards are capped** at `min(shard_tokens, val_tokens)`, so validation is not
+forced into one enormous shard:
+
+```python
+val_w = ShardWriter(args.data_dir, "val", min(args.shard_tokens, args.val_tokens))
+train_w = ShardWriter(args.data_dir, "train", args.shard_tokens)
+```
+
+Counts land slightly **above** the requests because the writer finishes its
+document batch rather than truncating. Measured on the smoke corpus:
+
+```
+done: 60,003,098 tokens (2,004,611 val, 57,998,487 train) in data/smoke
+```
+
+See the [smoke runbook](/docs/runbooks/local-smoke#step-4-prepare-the-smoke-dataset)
+for the full recorded output.

@@ -1,0 +1,128 @@
+---
+title: API reference
+description: The module map — every public class and function in tinyllm, with exact signatures, and where each one is explained
+---
+
+`tinyllm` is **nine source files totalling 1,104 lines**, with no framework and no
+inheritance hierarchy. Every public symbol is listed here with its exact signature
+from source. The conceptual pages explain *why* each piece is the way it is; these
+pages are the lookup.
+
+## The module map
+
+| Module | Lines | What it owns | Public API |
+|---|---|---|---|
+| [`config.py`](/docs/api/config) | 78 | Model and training hyperparameters, presets | `ModelConfig`, `TrainConfig`, `MODEL_PRESETS`, `TRAIN_PRESETS` |
+| [`model.py`](/docs/api/model) | 218 | The transformer, RoPE, KV cache, generation | `RMSNorm`, `precompute_rope`, `apply_rope`, `KVCache`, `Attention`, `SwiGLU`, `Block`, `TinyLLM` |
+| [`tokenizer.py`](/docs/api/tokenizer) | 241 | Byte-level BPE — training, encode/decode, fast export | `BPETokenizer`, `SPLIT_PATTERN`, `ENDOFTEXT` |
+| [`data.py`](/docs/api/data) | 100 | uint16 token shards and memmapped sampling | `ShardWriter`, `TokenShards`, `INDEX_NAME` |
+| [`muon.py`](/docs/api/muon) | 81 | The Muon optimizer and the parameter split | `zeropower_via_newtonschulz5`, `Muon`, `build_optimizers` |
+| [`train.py`](/docs/api/train) | 261 | The pretraining loop, WSD schedule, DDP, checkpoints | `lr_scale`, `run`, `main`, `PEAK_FLOPS` |
+| [`sample.py`](/docs/api/sample-and-eval#tinyllmsample) | 49 | Loading a checkpoint and generating text | `load_model`, `main` |
+| [`eval_hellaswag.py`](/docs/api/sample-and-eval#tinyllmeval_hellaswag) | 68 | HellaSwag continuation-likelihood eval | `ending_losses`, `main` |
+
+Two helper scripts sit outside the package:
+
+| Script | What it does | Reference |
+|---|---|---|
+| `scripts/train_tokenizer.py` | Trains the canonical 32k tokenizer on FineWeb-Edu | [Tokenizer](/docs/api/tokenizer#scriptstrain_tokenizerpy) |
+| `scripts/prepare_data.py` | Streams, encodes, and shards the corpus | [Data](/docs/api/data#scriptsprepare_datapy) |
+
+## Package exports
+
+`tinyllm/__init__.py` re-exports the six symbols you need for anything ordinary:
+
+```python
+from .config import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
+from .model import TinyLLM
+from .tokenizer import BPETokenizer
+
+__all__ = [
+    "MODEL_PRESETS", "TRAIN_PRESETS", "ModelConfig", "TrainConfig",
+    "TinyLLM", "BPETokenizer",
+]
+```
+
+Everything else is imported from its module directly (`from tinyllm.data import
+TokenShards`).
+
+## Command-line entry points
+
+Every executable surface, in the order you would use it:
+
+```bash
+# 1. train a tokenizer (skippable — tokenizer/tokenizer.json is committed)
+uv run python scripts/train_tokenizer.py --max-bytes 250000000
+
+# 2. encode a corpus into uint16 shards
+uv run python scripts/prepare_data.py --data-dir data/fineweb-edu
+
+# 3. pretrain
+uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+
+# 3b. pretrain on 8 GPUs — same run, same math
+uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
+    --config d26 --tokenizer tokenizer/tokenizer.json
+
+# 4. generate
+uv run python -m tinyllm.sample --ckpt out/d26/ckpt_last.pt \
+    --tokenizer tokenizer/tokenizer.json --prompt "The"
+
+# 5. evaluate
+uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
+    --tokenizer tokenizer/tokenizer.json --limit 1000
+```
+
+## The 60-second tour
+
+Training a model from scratch, end to end, using only the public API:
+
+```python
+from tinyllm import MODEL_PRESETS, TRAIN_PRESETS
+from tinyllm.train import run
+
+mc = MODEL_PRESETS["smoke"]
+tc = TRAIN_PRESETS["smoke"]
+tc.data_dir = "data/smoke"
+
+result = run(mc, tc, tokenizer_path="tokenizer/tokenizer.json")
+print(result["final_val_loss"])
+```
+
+Loading it back and generating:
+
+```python
+import torch
+
+from tinyllm import BPETokenizer
+from tinyllm.sample import load_model
+
+model, cfg = load_model("out/smoke/ckpt_last.pt", "cpu")
+tok = BPETokenizer.load("tokenizer/tokenizer.json")
+
+ids = [tok.eot_id] + tok.encode("The")
+out = model.generate(torch.tensor([ids]), 60, temperature=0.8, top_k=50,
+                     eos_id=tok.eot_id)
+print(tok.decode(out[0].tolist()[1:]))
+```
+
+## Conventions across the codebase
+
+A few rules hold everywhere, and knowing them removes most surprises:
+
+- **No biases anywhere.** Every `nn.Linear` is `bias=False`.
+- **Configs are dataclasses, and mutable.** `MODEL_PRESETS` / `TRAIN_PRESETS` hold
+  **shared instances**, not factories — `main()` mutates them in place from CLI
+  flags. Mutating a preset in a long-lived process affects everyone who reads it
+  afterward; `dataclasses.replace(...)` if you want a copy.
+- **Shapes are `(B, T, C)`** through the model, `(B, H, T, head_dim)` inside
+  attention.
+- **Randomness is seeded by value, never by stream.** Data sampling derives a
+  fresh `np.random.default_rng([...])` from `(seed, rank, step, micro)`, which is
+  what makes [resume](/docs/training/checkpointing) bit-exact.
+- **Leading underscore means private** and unlisted here — `_save_ckpt`,
+  `_pick_device`, `_autocast_ctx`, `_count_words`, `_bytes_to_unicode`,
+  `_build`, `_flush`, `_init_weights`, `_encode_word`.
+- **`from __future__ import annotations`** in every module except `__init__.py`
+  and `config.py`, so annotations are strings and `X | None` in a signature costs
+  nothing at runtime.
