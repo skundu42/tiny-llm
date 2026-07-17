@@ -1,0 +1,233 @@
+---
+title: RoPE
+description: Rotary position embeddings — the rotation, the proof that attention scores depend only on relative distance, the NeoX half-split layout, and the θ choice
+---
+
+The model has **no positional embedding added to the token embedding**. Position
+enters in exactly one place: queries and keys are *rotated* by an angle
+proportional to their absolute position, inside every attention layer, just
+before the scores are computed. That is RoPE (Su et al., 2021), and its defining
+property is that the rotation cancels in a way that leaves the attention score
+depending only on the **distance** between two tokens.
+
+## The idea, in two dimensions
+
+Take a 2-D slice of a query vector at position `m`, and rotate it by angle `mθ`:
+
+```
+R(mθ) = [ cos(mθ)  -sin(mθ) ]
+        [ sin(mθ)   cos(mθ) ]
+```
+
+Do the same to a key at position `n`, rotating by `nθ`. Now compute their dot
+product — the thing attention actually cares about:
+
+```
+⟨R(mθ)·q, R(nθ)·k⟩ = qᵀ R(mθ)ᵀ R(nθ) k
+                    = qᵀ R(-mθ) R(nθ) k        (rotations: Rᵀ = R⁻¹ = R(-angle))
+                    = qᵀ R((n - m)θ) k          (rotations compose additively)
+```
+
+That is the whole result. **The absolute positions `m` and `n` vanish; only
+`n - m` survives.** Each vector is tagged with its absolute position — which is
+what makes it cheap and cacheable — yet every score the model can compute is a
+function of relative distance. You get relative-position attention without ever
+materializing an `(T, T)` bias matrix.
+
+Two immediate corollaries the tests check:
+
+- **Rotations preserve length.** `‖R(mθ)q‖ = ‖q‖`, so RoPE injects position
+  without touching the magnitude of any query or key.
+- **Position 0 is the identity.** `R(0) = I`, so the first token is untouched.
+
+```python
+def test_rope_preserves_norm():
+    torch.manual_seed(0)
+    cos, sin = precompute_rope(64, 128, 10000.0)
+    x = torch.randn(2, 4, 128, 64)
+    y = apply_rope(x, cos, sin)
+    assert torch.allclose(x.norm(dim=-1), y.norm(dim=-1), atol=1e-4)
+
+
+def test_rope_position_zero_is_identity():
+    cos, sin = precompute_rope(64, 8, 10000.0)
+    x = torch.randn(1, 2, 1, 64)
+    assert torch.allclose(apply_rope(x, cos[:1], sin[:1]), x, atol=1e-6)
+```
+
+And the relative property itself, stated directly as a test — the score at
+positions `(5, 9)` must equal the score at `(105, 109)`, because both are
+distance 4:
+
+```python
+def test_rope_relative_property():
+    """q.k after RoPE depends only on relative distance."""
+    torch.manual_seed(0)
+    cos, sin = precompute_rope(64, 256, 10000.0)
+    q = torch.randn(1, 1, 1, 64)
+    k = torch.randn(1, 1, 1, 64)
+
+    def score(qi: int, kj: int) -> float:
+        qr = apply_rope(q, cos[qi : qi + 1], sin[qi : qi + 1])
+        kr = apply_rope(k, cos[kj : kj + 1], sin[kj : kj + 1])
+        return (qr * kr).sum().item()
+
+    assert abs(score(5, 9) - score(105, 109)) < 1e-3
+    assert abs(score(5, 9) - score(9, 5)) > 1e-4  # direction matters
+```
+
+The second assertion is the subtle half: `score(5, 9) ≠ score(9, 5)`. The
+rotation encodes a **signed** distance, so "four tokens before" and "four tokens
+after" are distinguishable. A symmetric relative encoding would throw away word
+order.
+
+## From 2-D to 64-D: many frequencies
+
+A `head_dim = 64` vector is treated as **32 independent 2-D pairs**, each rotated
+at its own frequency. The frequencies are a geometric series:
+
+```python
+def precompute_rope(
+    head_dim: int, max_seq_len: int, theta: float, device: torch.device | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cos/sin tables, each (max_seq_len, head_dim // 2), float32."""
+    inv_freq = 1.0 / (
+        theta ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim)
+    )
+    t = torch.arange(max_seq_len, device=device).float()
+    freqs = torch.outer(t, inv_freq)
+    return freqs.cos(), freqs.sin()
+```
+
+- `torch.arange(0, head_dim, 2)` gives `[0, 2, 4, ..., 62]` — 32 values, one per
+  pair. Dividing by `head_dim` and exponentiating gives `inv_freqᵢ = 1 / θ^(2i/d)`
+  for `i = 0..31`, i.e. **`θᵢ = 10000^(-2i/64)`**, sweeping geometrically from
+  `1.0` (pair 0) down to `10000^(-62/64) ≈ 1.33e-4` (pair 31).
+- `torch.outer(t, inv_freq)` forms the full `(max_seq_len, 32)` matrix of angles
+  `m · θᵢ` for every position `m` and every pair `i`.
+- The tables are returned as `cos` and `sin`, each `(max_seq_len, head_dim // 2)`
+  = `(2048, 32)`, in **float32**.
+
+Why a spectrum of frequencies rather than one? A single rotation rate is
+ambiguous — it wraps around, and positions `m` and `m + 2π/θ` become
+indistinguishable. With 32 rates spanning four orders of magnitude, the fast
+pairs (`θ ≈ 1`, wavelength ≈ 6.3 tokens) resolve fine local ordering — *which* of
+the last few tokens — while the slow pairs (`θ ≈ 1.33e-4`, wavelength ≈ 47,000
+tokens) barely rotate across the entire 2048-token context and encode coarse
+"roughly how far back." The combination is a positional code that is precise
+locally and unambiguous globally, the same intuition as the sinusoidal encodings
+of the original transformer — applied as a rotation rather than an addition.
+
+These tables are computed **once** in `TinyLLM.__init__` and stored as
+non-persistent buffers:
+
+```python
+cos, sin = precompute_rope(cfg.head_dim, cfg.seq_len, cfg.rope_theta)
+self.register_buffer("rope_cos", cos, persistent=False)
+self.register_buffer("rope_sin", sin, persistent=False)
+```
+
+`persistent=False` keeps them out of the `state_dict` — they are a pure
+deterministic function of `(head_dim, seq_len, theta)`, all three of which live
+in the config that the [checkpoint already
+stores](/docs/training/checkpointing), so writing 2048 × 32 floats into every
+checkpoint would be redundant.
+
+## The NeoX half-split layout
+
+The math above pairs dimension `2i` with `2i+1` (adjacent elements). The
+implementation pairs dimension `i` with `i + 32` — the **half-split** or "NeoX"
+convention:
+
+```python
+def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Rotate (B, H, T, head_dim) by the tables' T positions (NeoX half-split)."""
+    x1, x2 = x.chunk(2, dim=-1)
+    cos = cos[None, None, :, :]
+    sin = sin[None, None, :, :]
+    out = torch.cat((x1 * cos - x2 * sin, x1 * sin + x2 * cos), dim=-1)
+    return out.to(x.dtype)
+```
+
+`x.chunk(2, dim=-1)` splits the 64-dim head into `x1 = x[..., :32]` and
+`x2 = x[..., 32:]`. Element `j` of `x1` and element `j` of `x2` form the 2-D pair
+rotated at frequency `θⱼ`:
+
+```
+ index:  0    1    2   ...  31  │  32   33   34  ...  63
+        ┌────┬────┬────┬───┬────┼────┬────┬────┬───┬────┐
+   x =  │ a₀ │ a₁ │ a₂ │...│a₃₁ │ b₀ │ b₁ │ b₂ │...│b₃₁ │
+        └────┴────┴────┴───┴────┴────┴────┴────┴───┴────┘
+         └──────── x1 ────────┘  └──────── x2 ────────┘
+              ▲                        ▲
+              └──── pair j = (aⱼ, bⱼ), rotated by angle m·θⱼ ────┘
+
+  out[j]      = aⱼ·cos(m·θⱼ) − bⱼ·sin(m·θⱼ)      ← first half
+  out[j + 32] = aⱼ·sin(m·θⱼ) + bⱼ·cos(m·θⱼ)      ← second half
+```
+
+That is exactly `torch.cat((x1 * cos - x2 * sin, x1 * sin + x2 * cos), dim=-1)` —
+the 2×2 rotation matrix from the top of the page, applied to all 32 pairs at once
+as four elementwise multiplies and two adds. The `cos[None, None, :, :]` reshape
+broadcasts the `(T, 32)` tables across the batch and head dims of the `(B, H, T,
+64)` input.
+
+**Why half-split instead of adjacent pairs?** It is mathematically equivalent —
+just a fixed permutation of the head's dimensions. Since the permutation is
+applied identically to `q` and `k`, and the model *learns* `wq` and `wk` in the
+first place, the network is free to arrange its features to suit whichever
+convention is used; nothing is lost. The half-split wins on implementation:
+`chunk` and `cat` are two contiguous slice operations, whereas adjacent pairing
+needs a strided interleave (`x[..., 0::2]`, `x[..., 1::2]`) that produces
+non-contiguous tensors and worse memory access. GPT-NeoX popularized it, Llama
+and most of the ecosystem followed, so it is also the convention that
+interoperates with everyone else's checkpoints.
+
+The final `.to(x.dtype)` mirrors [RMSNorm's
+contract](/docs/architecture/rmsnorm#why-compute-in-fp32-and-cast-back): the
+tables are fp32, so the multiply promotes, and the result is cast back to the
+input's dtype so the module is transparent under bf16 autocast.
+
+## Where RoPE sits in attention
+
+```python
+q, k = self.q_norm(q), self.k_norm(k)
+q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
+```
+
+Three details:
+
+- **Only `q` and `k` are rotated — never `v`.** Position must influence *which*
+  tokens are attended to, which is decided entirely by the `q·k` scores. The
+  values are the payload being mixed; rotating them would corrupt the content
+  the model is trying to retrieve.
+- **RoPE comes after QK-norm**, so the normalization sees un-rotated vectors.
+  Order is irrelevant to correctness here — [QK-norm](/docs/architecture/attention#qk-norm)
+  only rescales, RoPE only rotates, and rotation preserves norm — but it means
+  the norm is applied to the raw projections.
+- **The caller slices the tables to the current positions.** During cached
+  decoding, `forward` slices `rope_cos[pos0 : pos0 + T]` with `pos0 = cache.pos`,
+  so a single decoded token is rotated by its true absolute position. Keys in the
+  [KV cache](/docs/architecture/attention#the-kv-cache-and-why-4-kv-heads) are
+  stored **already rotated** — which is sound precisely because each key's
+  rotation depends only on its own absolute position and never on the query's.
+
+## Why θ = 10,000
+
+`rope_theta = 10000.0` in both presets — the original RoPE value.
+
+The base sets the wavelength of the slowest pair: `2π · θ^(62/64) ≈ 2π · 7499 ≈
+47,000` tokens. Against a **2048-token context**, even the slowest rotation
+completes only about 4% of a turn across the full window, so every
+position in the context gets a distinct, unambiguous angle on that pair. There is
+plenty of headroom — 10,000 is the well-tested default and it is not remotely
+strained at this context length.
+
+The reason large-θ variants exist (Llama 3 uses 500,000; long-context models go
+to a million or more) is **context extension**. Push the context to 128k and the
+fast pairs have wrapped thousands of times; the model must extrapolate to
+position-angle combinations it never saw in training, and it degrades. Raising θ
+stretches every wavelength, keeping distant positions distinguishable. At 2048
+tokens that problem does not exist, and raising θ would only waste resolution by
+making the fast pairs rotate more slowly than they need to. If this model were
+ever extended to a longer context, θ is the knob to turn.

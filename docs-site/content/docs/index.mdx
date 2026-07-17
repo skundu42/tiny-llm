@@ -1,13 +1,59 @@
 ---
-title: Hello World
-description: Your first document
+title: tiny-llm
+description: A 489M-parameter decoder-only transformer pretrained from scratch in PyTorch — every layer, the tokenizer, the data pipeline, and the optimizer hand-written
 ---
 
-Welcome to the docs! You can start writing documents in `/content/docs`.
+`tiny-llm` is a **489,297,408-parameter** decoder-only language model, pretrained
+from scratch on ~10B tokens of FineWeb-Edu. Every piece is hand-written in
+Python/PyTorch: the transformer layers, the byte-level BPE tokenizer, the shard
+format and sampler, the Muon+AdamW optimizer, and the training loop. There is no
+`transformers` dependency and no pre-built model components — `nn.Linear`,
+`nn.Embedding`, and `F.scaled_dot_product_attention` are the lowest-level
+primitives used, and even SDPA is checked against a naive reference in the tests.
 
-## What is Next?
+The whole thing is developed and verified on a laptop (Apple Silicon, CPU/MPS)
+against a 13.1M-parameter `smoke` preset that exercises the identical code path,
+then the real run is launched on a rented GPU box.
 
-<Cards>
-  <Card title="Learn more about Next.js" href="https://nextjs.org/docs" />
-  <Card title="Learn more about Fumadocs" href="https://fumadocs.dev" />
-</Cards>
+## Headline numbers
+
+| | |
+|---|---|
+| Parameters | **489,297,408** total · 447,354,368 non-embedding |
+| Architecture | 26 layers, `d_model` 1280, 20 heads (4 KV heads), SwiGLU `d_ff` 3456 |
+| Context | 2048 tokens, RoPE θ = 10,000 |
+| Vocab | 32,768, byte-level BPE trained by us — 4.517 bytes/token |
+| Training data | ~10B FineWeb-Edu tokens (≈ Chinchilla-optimal for this size) |
+| Optimizer | Muon (hidden matrices) + AdamW (embedding, norms), WSD schedule |
+| Cost of the real run | ≈20 h / **$50-60** on one H100 · ≈2.5 h on 8×H100 |
+| Local dev preset | 13,111,296 params — full loop in ~15 min on an M3 Pro |
+
+## What is hand-written here
+
+| Component | What it is | Where |
+|---|---|---|
+| [RMSNorm](/docs/architecture/rmsnorm) | Pre-norm, fp32 compute cast back | `tinyllm/model.py` |
+| [RoPE](/docs/architecture/rope) | Rotary positions, NeoX half-split, precomputed tables | `tinyllm/model.py` |
+| [Attention](/docs/architecture/attention) | Grouped-query (20 Q / 4 KV heads) + QK-norm, causal SDPA | `tinyllm/model.py` |
+| [SwiGLU](/docs/architecture/swiglu) | Gated MLP, `d_ff` 3456, no biases | `tinyllm/model.py` |
+| [Embeddings & init](/docs/architecture/embeddings-and-init) | Tied input/output, 0.02 init, 1/√(2L) residual scaling | `tinyllm/model.py` |
+| [Tokenizer](/docs/tokenizer) | Byte-level BPE, trained on 250 MB of FineWeb-Edu | `tinyllm/tokenizer.py` |
+| [Data pipeline](/docs/data) | uint16 shards, memmapped random-crop sampler, stateless RNG | `tinyllm/data.py` |
+| [Training loop](/docs/training/index) | Grad accumulation, bf16 autocast, WSD schedule | `tinyllm/train.py` |
+| [Muon](/docs/training/muon) | Newton-Schulz orthogonalized momentum | `tinyllm/muon.py` |
+| [Distributed](/docs/training/distributed) | Plain DDP via `torchrun`, `no_sync` accumulation | `tinyllm/train.py` |
+| [Checkpointing](/docs/training/checkpointing) | Atomic writes, bit-exact resume | `tinyllm/train.py` |
+
+## Where to start
+
+- **[Getting started](/docs/getting-started)** — install with `uv`, run the test
+  suite, and train the smoke model end to end on your laptop, with real recorded
+  numbers from an actual run.
+- **[Architecture](/docs/architecture)** — the full forward pass, the exact
+  parameter budget, and a page per component deriving the math and walking the
+  real code.
+- **[Training](/docs/training/index)** — what happens per step, and why Muon
+  trains the hidden matrices while AdamW keeps the embedding.
+
+Every page follows the same shape: what the thing is, the math, the actual code
+lifted from the repo, and why that choice was made over the alternatives.

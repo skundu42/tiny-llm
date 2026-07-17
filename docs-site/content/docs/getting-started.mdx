@@ -1,0 +1,178 @@
+---
+title: Getting started
+description: Install with uv, run the test suite, and train the smoke model end to end on a laptop — with the numbers from a real run
+---
+
+Everything in this repo runs on a laptop. The test suite needs no downloaded data
+and finishes in seconds; the `smoke` preset trains a real 13.1M-parameter model
+through the exact same code path as the 489M run, in about 15 minutes on Apple
+Silicon. Nothing here requires a GPU.
+
+## Install
+
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). Python 3.12+ is
+required (`pyproject.toml` pins `requires-python = ">=3.12"`).
+
+```bash
+git clone <repo-url> tiny-llm
+cd tiny-llm
+uv sync
+```
+
+`uv sync` creates the virtualenv and installs `torch>=2.6`, `numpy>=2.0`,
+`regex`, `datasets`, `tokenizers`, and `tqdm`, plus `pytest` from the dev group.
+Prefix commands with `uv run` and they execute inside that environment.
+
+## Run the tests
+
+```bash
+uv run pytest -q
+```
+
+This is the fastest way to confirm the install works, and it is also the
+correctness story for the project. The suite covers every component against
+hand-derived references that never touch the network or a dataset:
+`F.scaled_dot_product_attention` is checked against a naive masked-softmax
+[reference attention](/docs/architecture/attention#the-reference-oracle), RoPE is
+checked for norm preservation and the relative-position property, both presets'
+parameter counts are asserted **exactly** (489,297,408 and 13,111,296), KV-cache
+decoding is checked against a full uncached forward, and resume is checked to be
+bit-exact.
+
+## Train the tokenizer
+
+The data pipeline needs a tokenizer before it can encode anything. A small byte
+budget produces a usable one in a few minutes:
+
+```bash
+uv run python scripts/train_tokenizer.py --max-bytes 20_000_000
+```
+
+The canonical tokenizer — the one used for the real run — is trained on a much
+larger sample and is what the numbers below use:
+
+```bash
+uv run python scripts/train_tokenizer.py \
+    --out tokenizer/tokenizer.json \
+    --max-bytes 250_000_000 \
+    --vocab-size 32768 \
+    --num-proc 8 \
+    --min-word-freq 2
+```
+
+Measured result: a **32,768-token vocab trained on 250 MB of FineWeb-Edu text**,
+compressing held-out documents at **4.517 bytes/token**. See
+[Tokenizer](/docs/tokenizer) for why 32,768 and how the trainer works.
+
+## Prepare the smoke dataset
+
+```bash
+uv run python scripts/prepare_data.py --data-dir data/smoke \
+    --max-tokens 20_000_000 --val-tokens 1_000_000 --shard-tokens 20_000_000
+```
+
+This streams FineWeb-Edu, encodes it with the tokenizer, and writes uint16 token
+shards plus a JSON index. The recorded smoke corpus came out at **60,003,098
+tokens across 5 shards** — 2,004,611 validation and 57,998,487 train. (Token
+counts land above the `--max-tokens` request because the writer finishes the
+document it is in rather than truncating mid-document.) Details in
+[Data](/docs/data).
+
+## Train
+
+```bash
+uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json
+```
+
+The `smoke` preset (`tinyllm/config.py`) is 6 layers, `d_model` 256, 4 heads / 2
+KV heads, `d_ff` 768, context 512 — **13,111,296 parameters** — trained for 600
+steps at 16,384 tokens per step with a 20-step warmup. `torch.compile` is
+disabled automatically off CUDA and precision falls back to fp32, so no flags are
+needed on a Mac.
+
+Progress goes to stdout and to `out/smoke/log.csv` (`step, split, loss, lr_scale,
+tok_per_sec`); checkpoints land in `out/smoke/ckpt_last.pt`.
+
+### What a real run looks like
+
+These are measured numbers from a complete `smoke` run on an **Apple M3 Pro
+(MPS)** — the full 600-step schedule, straight from `out/smoke/log.csv`:
+
+| Step | Train loss | Validation loss |
+|---|---|---|
+| 0 | 10.44 | — |
+| 99 | — | 6.73 |
+| 100 | 6.69 | — |
+| 199 | — | 6.26 |
+| 200 | 6.16 | — |
+| 299 | — | 5.97 |
+| 300 | 5.89 | — |
+| 399 | — | 5.78 |
+| 499 | — | 5.62 |
+| 599 (final) | 5.53 | **5.50** |
+
+Throughput held around **13,000 tokens/sec** (median 12,904 over steps 10-599),
+putting the full 600 steps — 600 × 16,384 = **9,830,400 tokens** — at roughly
+**13-15 minutes**.
+
+The single most informative number is the first one. **The initial loss is
+10.44**, and `ln(32768) = 10.40`. A model that has learned nothing should assign
+uniform probability `1/vocab_size` to every token, giving a cross-entropy of
+exactly `ln(vocab_size)`. Landing within 0.04 of it says the
+[initialization](/docs/architecture/embeddings-and-init) is correct — the logits
+start near-uniform rather than confidently wrong, which is what the 0.02 init and
+the 1/√(2L) residual scaling are for. This is asserted in the test suite too
+(`test_forward_loss_near_uniform_at_init`).
+
+From there train loss falls steeply and **validation loss tracks it down all the
+way** (6.73 → 6.26 → 5.97 → 5.78 → 5.62 → 5.50) with no divergence, and at the
+end val (5.50) sits just *below* train (5.53) — no overfitting, which is exactly
+what you expect when the model consumes 9.8M tokens out of a 58M-token training
+split: under a fifth of an epoch, so no example is ever seen twice and train and
+val are equally unfamiliar. That curve is the real deliverable: the loop, the sampler, the
+optimizer split, and the LR schedule are all wired up correctly.
+
+At this size on this little data the model is nowhere near producing coherent
+text — the point of the smoke run is that **every component works end to end**,
+not that the result is good.
+
+<Callout type="info">
+  Loss is a per-token cross-entropy in nats. 5.50 nats ≈ a perplexity of ~245
+  over a 32,768-token vocab — a long way from a real model, but the run is only
+  ~0.1% of the token budget the `d26` run gets.
+</Callout>
+
+## Sample from the checkpoint
+
+```bash
+uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt \
+    --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"
+```
+
+## Scaling up to the real run
+
+The same commands with `--config d26` train the 489,297,408-parameter model on
+the full ~10B-token FineWeb-Edu subset:
+
+```bash
+uv run python scripts/prepare_data.py     # full ~10B tokens, ~20 GB
+uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+# or on an 8-GPU box:
+uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
+    --config d26 --tokenizer tokenizer/tokenizer.json
+```
+
+| Setup | Wall time | Approx. cost |
+|---|---|---|
+| 1× H100 | ≈20 h | ≈$50-60 (at $2.5-3/h) |
+| 8× H100 (DDP) | ≈2.5 h | similar total spend |
+
+Single-GPU is the degenerate case of the same DDP code path — see
+[Distributed training](/docs/training/distributed). Run it in `tmux`, and if the
+box dies, `--resume` picks up
+[bit-exactly](/docs/training/checkpointing) from the last atomic checkpoint.
+
+## Next
+
+- [Architecture](/docs/architecture) — the forward pass and the parameter budget.
+- [The training loop](/docs/training/index) — what each step actually does.

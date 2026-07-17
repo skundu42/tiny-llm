@@ -1,0 +1,170 @@
+---
+title: RMSNorm
+description: LayerNorm without the mean subtraction — the math, why the centering was never needed, and why the computation is forced to fp32
+---
+
+Every normalization in the model is RMSNorm: the two per-block norms, the
+per-head [QK-norms](/docs/architecture/attention#qk-norm), and `final_norm`. It
+is the smallest module in the file and the one that appears the most times.
+
+```python
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dtype = x.dtype
+        x = x.float()
+        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return (x * self.weight.float()).to(dtype)
+```
+
+## LayerNorm vs. RMSNorm
+
+LayerNorm (Ba et al., 2016) standardizes each vector across the feature
+dimension: subtract the mean, divide by the standard deviation, then apply a
+learned scale `γ` and shift `β`.
+
+```
+mean(x) = (1/d) Σᵢ xᵢ
+var(x)  = (1/d) Σᵢ (xᵢ - mean(x))²
+LN(x)   = γ ⊙ (x - mean(x)) / √(var(x) + ε) + β
+```
+
+RMSNorm (Zhang & Sennrich, 2019) throws away the centering and the shift. It
+divides by the root-mean-square of the vector and scales:
+
+```
+rms(x)  = √( (1/d) Σᵢ xᵢ² )
+RMS(x)  = γ ⊙ x / √(rms(x)² + ε)
+```
+
+Line by line, that is exactly the code. `x.pow(2).mean(-1, keepdim=True)` is
+`rms(x)²` — the mean of squares over the last (feature) dimension, keeping the
+dim so it broadcasts back over `(..., d)`. Adding `eps` and taking
+`torch.rsqrt` gives `1 / √(rms² + ε)` in one fused op — the reciprocal square
+root is cheaper than a `sqrt` followed by a divide. Multiplying by `self.weight`
+applies the per-feature gain `γ`.
+
+The two differences from LayerNorm:
+
+- **No mean subtraction.** RMSNorm normalizes the vector's *magnitude* without
+  moving its *center*.
+- **No bias `β`.** Consistent with the rest of the model, which has no biases
+  anywhere.
+
+### Why dropping the centering is fine
+
+The original LayerNorm paper motivated the mean subtraction as part of
+"re-centering invariance," but the follow-up work found that essentially all of
+the benefit comes from the **re-scaling**, not the re-centering. What
+normalization actually buys you is a bounded activation magnitude going into the
+next matmul, which keeps gradients well-behaved; the mean offset was carried
+along for the ride.
+
+Two practical arguments back the removal:
+
+- **It measurably does not hurt.** RMSNorm matches LayerNorm's quality on
+  language models, which is why Llama, PaLM, Mistral, Qwen, and effectively every
+  recent open model use it. This is the settled consensus, not a gamble.
+- **It is cheaper.** LayerNorm needs two reductions over the feature dim (one for
+  the mean, one for the variance around it) and the subtraction. RMSNorm needs
+  one reduction and no subtraction. Normalization is memory-bandwidth-bound — it
+  reads and writes the whole activation tensor while doing almost no arithmetic —
+  so removing a full pass over the data is a real saving. In `d26` this module
+  runs **105 times per forward** (26 × `attn_norm`, 26 × `mlp_norm`, 26 × 2
+  per-head QK-norm, plus `final_norm`), and the small ones sit directly in the
+  attention hot path.
+
+Note also that in a pre-norm network the thing being normalized is the residual
+stream, whose mean is already near zero at initialization and stays small —
+there is not much of a center to remove in the first place.
+
+The learned gain is initialized to **ones** (`torch.ones(dim)`), so at
+initialization the module is exactly `x / rms(x)` and each normalized vector has
+unit RMS. `test_rmsnorm_unit_rms` asserts precisely that:
+
+```python
+def test_rmsnorm_unit_rms():
+    torch.manual_seed(0)
+    x = torch.randn(4, 16, 64) * 3.0
+    y = RMSNorm(64)(x)
+    rms = y.pow(2).mean(-1).sqrt()
+    assert torch.allclose(rms, torch.ones_like(rms), atol=1e-3)
+```
+
+Input scaled up by 3× comes out with RMS 1 regardless — that scale invariance is
+the whole point.
+
+## Why compute in fp32 and cast back
+
+Three of the five lines in `forward` exist purely for numerical precision:
+
+```python
+dtype = x.dtype
+x = x.float()
+...
+return (x * self.weight.float()).to(dtype)
+```
+
+Remember the number this must not corrupt. Training runs under **bf16 autocast**
+([details](/docs/training/index)), so `x` arrives as bfloat16 — which has an
+8-bit exponent (the same enormous range as fp32) but only **7 mantissa bits**,
+i.e. roughly 2-3 decimal digits of precision.
+
+Now look at what the sum of squares does. Reducing `x.pow(2)` over `d_model =
+1280` elements in bf16 is bad in two compounding ways:
+
+- **The squares can overflow or flush.** Squaring doubles the exponent. An
+  activation at 1e-3 squares to 1e-6, one at 300 squares to 9e4. bf16's range
+  survives this, but the accumulation is where it breaks down.
+- **The accumulation loses small terms.** Adding 1280 numbers sequentially into a
+  7-mantissa-bit accumulator means that once the running sum is large, each new
+  small term is **rounded away entirely** — a term smaller than about 1/256 of
+  the running sum contributes nothing. The error compounds across the reduction,
+  and the resulting `rms` can be off by a percent or more.
+
+An error in `rms` is not a small perturbation, because the whole tensor is then
+**divided by it**. A 1% error in the norm is a 1% multiplicative error on all
+1280 features simultaneously — a systematic, correlated bias applied to the input
+of the next matmul, not the kind of unbiased noise that averages out. Repeat that
+105 times per forward pass, in the one module whose entire job is to produce a
+precise scale factor, and it becomes a genuine training-stability problem.
+
+So `x.float()` upcasts to fp32 (24 mantissa bits), the square-mean-rsqrt chain
+runs there, and `self.weight.float()` keeps the gain multiply in fp32 too. The
+result is cast back with `.to(dtype)` so the module is **transparent** to
+autocast: it returns exactly the dtype it was handed, and the surrounding bf16
+graph is unaffected.
+
+This costs essentially nothing. Normalization is bandwidth-bound, not
+compute-bound; the fp32 arithmetic is free relative to the memory traffic, and
+the upcast happens on data already in registers. It is the standard trick — the
+same reason [cross-entropy is computed in
+fp32](/docs/architecture/index#the-forward-pass) at the end of the forward pass.
+
+`test_rmsnorm_dtype_preserved` pins the contract:
+
+```python
+def test_rmsnorm_dtype_preserved():
+    x = torch.randn(2, 8, dtype=torch.bfloat16)
+    assert RMSNorm(8)(x).dtype == torch.bfloat16
+```
+
+## eps
+
+`norm_eps = 1e-6` in both presets, added **inside** the square root
+(`rsqrt(mean + eps)`), guarding against a division by zero if a vector is
+all-zeros. It is small enough to be irrelevant to a unit-RMS activation and large
+enough to keep fp32 from producing an infinity.
+
+## Where the gains go
+
+Every `RMSNorm.weight` is 1-D, which is exactly how `build_optimizers` routes
+parameters: all norm gains land in the `norms` bucket and are trained by **AdamW
+with `weight_decay = 0.0`**. There is nothing to orthogonalize in a per-channel
+scale vector, and decaying a normalization gain toward zero would fight the
+normalization itself. See [the parameter
+split](/docs/training/muon#the-parameter-split-who-gets-muon).

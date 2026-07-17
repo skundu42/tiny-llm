@@ -1,0 +1,210 @@
+---
+title: Embeddings and initialization
+description: Tied input/output embeddings, the 0.02 normal init, and why residual projections are downscaled by 1/√(2L)
+---
+
+The embedding table and the initialization scheme are the two places where a
+handful of lines decide whether the first thousand steps of training behave. This
+page covers weight tying (worth 41,943,040 parameters), the `std = 0.02` normal
+init, and the `1/√(2L)` residual downscale — the reason the [measured initial
+loss is 10.44 against a theoretical
+10.40](/docs/getting-started#what-a-real-run-looks-like).
+
+## Weight tying
+
+```python
+self.embed = nn.Embedding(cfg.vocab_size, cfg.d_model)
+...
+self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+self.lm_head.weight = self.embed.weight  # weight tying
+```
+
+Two modules, **one tensor**. The input embedding maps token IDs → vectors; the
+output head maps the final hidden state → logits over the vocabulary. Both are
+`(32768, 1280)` matrices, and after that assignment they are literally the same
+object in memory — `lm_head` uses it transposed.
+
+`test_tied_embeddings` asserts identity, not equality:
+
+```python
+def test_tied_embeddings():
+    model = TinyLLM(_small_cfg())
+    assert model.lm_head.weight is model.embed.weight
+```
+
+`is`, not `torch.equal` — two tensors that merely start out equal would drift
+apart after the first optimizer step. Sharing the object means gradients from
+both uses accumulate into one `.grad`, and one update moves both.
+
+**What it saves.** An untied model would carry a second `32,768 × 1,280` matrix:
+
+```
+41,943,040 extra parameters  =  8.6% of the model's 489,297,408
+```
+
+At this scale the vocabulary is a big chunk of the model — the embedding is
+41,943,040 of 489,297,408 parameters on its own. Untying would spend 8.6% of the
+budget on a matrix that does nearly the same job as one already present.
+
+**Why it works.** Both matrices answer the same question — *which vectors
+correspond to which tokens* — from opposite directions. Row `i` of the input
+embedding is token `i`'s vector; row `i` of the output matrix is the direction
+whose dot product with the hidden state gives token `i`'s logit. There is no
+reason those should be unrelated: if two tokens are near-synonyms, they should be
+close in both. Tying enforces a single shared token-vector space.
+
+It also **regularizes**. Rare tokens are the weak point of an untied model — a
+token seen a handful of times gets a barely-trained input row and a barely-trained
+output row. Tied, every occurrence trains the single shared row from both
+directions, doubling the useful signal per occurrence.
+
+This is standard (Press & Wolf, 2017; Inan et al., 2016) and near-universal at
+this scale. The tradeoff shows up only in much larger models, where the embedding
+is a small fraction of the budget and untying buys a little quality — GPT-2 and
+Llama-family models tie at small sizes and some untie at large ones.
+
+**One consequence** shows up in the optimizer. Because it is a single tensor,
+`named_parameters()` deduplicates it and it appears **once**, under the `embed`
+name — which is exactly what `build_optimizers`'s name check keys on to route it
+to AdamW rather than Muon. See [the parameter
+split](/docs/training/muon#the-parameter-split-who-gets-muon).
+
+## The base init: normal(0, 0.02)
+
+```python
+@staticmethod
+def _init_weights(module: nn.Module) -> None:
+    if isinstance(module, (nn.Linear, nn.Embedding)):
+        nn.init.normal_(module.weight, mean=0.0, std=0.02)
+```
+
+Applied by `self.apply(self._init_weights)`, which walks every submodule. Every
+`nn.Linear` and `nn.Embedding` weight is drawn from `N(0, 0.02²)`. `RMSNorm`
+gains are untouched — they are created as `torch.ones(dim)` and stay at 1.0,
+which is [what makes the module exactly `x / rms(x)` at
+init](/docs/architecture/rmsnorm).
+
+`0.02` is the GPT-2 constant, and it is a *constant* rather than a fan-in-scaled
+rule like Xavier or Kaiming. That works here because the model's widths are all
+in the same neighborhood — `1/√1280 ≈ 0.028` and `1/√3456 ≈ 0.017` bracket 0.02
+— so a single value is close enough to fan-in scaling everywhere it is applied,
+and pre-norm makes the network far less sensitive to the exact figure: an
+`RMSNorm` sits in front of every matmul and rescales its input to unit RMS
+regardless of what the incoming activations were doing.
+
+The embedding matters most. With `std = 0.02`, initial hidden states are small
+and, crucially, **the initial logits are near zero** — `lm_head` is the same
+matrix, so logits are dot products of two small vectors. Near-zero logits
+softmax to a **near-uniform distribution** over the 32,768 tokens, giving a
+cross-entropy of `ln(32768) = 10.40`.
+
+That is the number the smoke run reproduces: **measured initial loss 10.44**.
+Both the test suite and the real run check it:
+
+```python
+def test_forward_loss_near_uniform_at_init():
+    import math
+
+    torch.manual_seed(0)
+    cfg = _small_cfg()
+    model = TinyLLM(cfg)
+    x = torch.randint(0, cfg.vocab_size, (2, 17))
+    logits, loss = model(x[:, :-1], targets=x[:, 1:])
+    assert logits.shape == (2, 16, cfg.vocab_size)
+    assert abs(loss.item() - math.log(cfg.vocab_size)) < 1.0
+```
+
+Starting at exactly the entropy of the uniform distribution is the correct place
+to start. A larger init would produce confidently wrong logits — a much higher
+starting loss, and the first steps spent undoing arbitrary initial confidence
+rather than learning. This one assertion catches a startling range of bugs.
+
+## Residual scaling
+
+```python
+self.apply(self._init_weights)
+std = 0.02 / math.sqrt(2 * cfg.n_layer)
+for block in self.blocks:
+    nn.init.normal_(block.attn.wo.weight, mean=0.0, std=std)
+    nn.init.normal_(block.mlp.w_down.weight, mean=0.0, std=std)
+```
+
+After the uniform `0.02` pass, **two matrices per block are re-initialized
+smaller**: `attn.wo` and `mlp.w_down` — the two **residual projections**, the
+last operation in each branch before its result is added back into the residual
+stream.
+
+For `d26`:
+
+```
+std = 0.02 / √(2 × 26) = 0.02 / √52 ≈ 0.00277
+```
+
+roughly **7× smaller** than the base init.
+
+### Why
+
+This is the GPT-2 initialization scheme, and it exists to control **variance
+growth down the residual stream**. Recall that pre-norm makes the residual path a
+clean sum:
+
+```
+x_out = embed + branch₁ + branch₂ + ... + branch_{2L}
+```
+
+There are `2L` branches — one attention and one MLP per layer, so **52** for a
+26-layer model. That `2L` is precisely the `2 * cfg.n_layer` in the code.
+
+If each branch's output were initialized at unit variance, then — since the
+branches are approximately independent at init, and **variances of independent
+sums add** — the residual stream's variance would grow to ≈ `2L` by the top, i.e.
+its standard deviation would grow like `√(2L)`. The stream's magnitude would
+depend on the model's depth: a 26-layer model would produce activations `√52 ≈
+7.2×` larger than a single-layer one. Deep models would start with an inflated,
+depth-dependent residual scale, large activations into `final_norm`, and badly
+conditioned early gradients.
+
+The fix inverts that exactly. Scale each branch's *output* by `1/√(2L)` at init
+and its contribution to the variance is scaled by `1/(2L)`; summing `2L` of them
+restores a total of **≈ 1, independent of depth**. Because `wo` and `w_down` are
+the last linear op in their branches, scaling their weights scales the whole
+branch's output — one matrix per branch is enough, and it is why exactly these
+two are singled out.
+
+Only the **init** is scaled — these are ordinary parameters afterward, free to
+grow to whatever magnitude training wants. The scheme just ensures step 0 starts
+depth-neutral.
+
+`test_residual_projections_scaled_init` checks it empirically:
+
+```python
+def test_residual_projections_scaled_init():
+    cfg = _small_cfg()
+    model = TinyLLM(cfg)
+    expected_std = 0.02 / (2 * cfg.n_layer) ** 0.5
+    assert abs(model.blocks[0].attn.wo.weight.std().item() - expected_std) < expected_std * 0.2
+    assert abs(model.blocks[0].mlp.w_down.weight.std().item() - expected_std) < expected_std * 0.2
+```
+
+Measuring the sample standard deviation of the actual initialized tensor against
+`0.02/√(2L)`, within 20% — loose enough for sampling noise on a small tensor,
+tight enough to catch the base `0.02` init not having been overridden (which
+would be off by 7×).
+
+Note the ordering dependency: `self.apply(self._init_weights)` runs **first** and
+hits every `nn.Linear` including `wo` and `w_down`; the loop then overwrites those
+two per block. Reversing the order would silently undo the scaling — the kind of
+bug this test exists to catch.
+
+## Putting it together
+
+The three choices interlock:
+
+| Choice | Value | What it buys |
+|---|---|---|
+| Weight tying | one `(32768, 1280)` tensor | saves 41,943,040 params (8.6%); shared token space; better rare-token training |
+| Base init | `N(0, 0.02²)` | near-zero logits → loss starts at `ln(32768) = 10.40` |
+| Residual init | `0.02/√52 ≈ 0.00277` | residual stream variance ≈ 1 regardless of depth |
+
+The measured **10.44** at step 0 of the smoke run is the observable that says all
+three are wired correctly.

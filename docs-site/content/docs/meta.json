@@ -1,0 +1,15 @@
+{
+  "title": "tiny-llm",
+  "pages": [
+    "index",
+    "getting-started",
+    "architecture",
+    "tokenizer",
+    "data",
+    "training",
+    "evaluation",
+    "inference",
+    "runbooks",
+    "api"
+  ]
+}
