@@ -135,3 +135,37 @@ tiny-llm/
 - **Muon+AdamW over pure AdamW**: ~1.5–2× data-efficiency at identical compute, validated at this exact scale by nanochat (561M). (User-selected.)
 - **GQA + QK-norm + SwiGLU + RMSNorm + RoPE + tied embeddings**: the current small-model consensus stack; each piece is standard, stable, and cheap to implement from scratch.
 - **SDPA kernel inside from-scratch attention**: writing the *math* from scratch but using PyTorch's fused kernel is the only way the cloud run is affordable; the manual implementation ships in tests.
+
+## Amendments (post-implementation)
+
+This is a design record; the plan below is left as originally approved, and the
+three points below are noted here rather than rewritten into the sections
+above, since they were resolved differently once real implementation and
+review work happened.
+
+- **Validation holdout is the *first* `--val-tokens`, not the last shard.**
+  §"Data pipeline" above says "last shard held out as validation." The shipped
+  `scripts/prepare_data.py` instead routes tokens to the validation writer
+  first — `w = val_w if val_w.total_written < args.val_tokens else train_w` —
+  and only switches to the train writer once the validation quota is met.
+  Functionally equivalent for a single streamed, shuffled-at-source corpus
+  consumed once (either way validation is a token-count-bounded, non-overlapping
+  slice with no document in both splits), but the *first slice* wording is
+  what the code actually does.
+- **Shipped AdamW LR is `6e-4`, not `≈3e-4`.** §"Optimizer & training recipe"
+  above says "AdamW LR ≈ 3e-4; exact values tuned on the smoke config." The
+  value that shipped in `tinyllm/config.py`'s `TrainConfig.adamw_lr` — and that
+  the smoke run in `docs/superpowers/specs/smoke-results.md` was actually
+  measured against — is `6e-4`. The plan's own caveat ("exact values tuned on
+  the smoke config") anticipated this drift; this note just records where it
+  landed.
+- **MFU logging is implemented.** §"Optimizer & training recipe" lists "MFU
+  estimate" as a logging requirement; at the time of the smoke run it was not
+  yet wired up (`train.py` only shipped a `PEAK_FLOPS` reference constant for
+  computing it offline). It is now computed inline in `tinyllm/train.py`'s
+  master-rank logging branch — `flops_per_token = 6*N + 12*n_layer*d_model*
+  seq_len`, `mfu = flops_per_token * tok_s / peak_flops` where `peak_flops` is
+  looked up from `PEAK_FLOPS` by matching `torch.cuda.get_device_name()` — and
+  logged as an `mfu` column in `log.csv`, in the stdout step line, and to
+  Weights & Biases, written as an empty value when not computable (off CUDA,
+  or an unrecognized GPU).

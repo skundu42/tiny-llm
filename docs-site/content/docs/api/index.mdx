@@ -3,7 +3,7 @@ title: API reference
 description: The module map — every public class and function in tinyllm, with exact signatures, and where each one is explained
 ---
 
-`tinyllm` is **nine source files totalling 1,104 lines**, with no framework and no
+`tinyllm` is **nine source files totalling 1,148 lines**, with no framework and no
 inheritance hierarchy. Every public symbol is listed here with its exact signature
 from source. The conceptual pages explain *why* each piece is the way it is; these
 pages are the lookup.
@@ -13,11 +13,11 @@ pages are the lookup.
 | Module | Lines | What it owns | Public API |
 |---|---|---|---|
 | [`config.py`](/docs/api/config) | 78 | Model and training hyperparameters, presets | `ModelConfig`, `TrainConfig`, `MODEL_PRESETS`, `TRAIN_PRESETS` |
-| [`model.py`](/docs/api/model) | 218 | The transformer, RoPE, KV cache, generation | `RMSNorm`, `precompute_rope`, `apply_rope`, `KVCache`, `Attention`, `SwiGLU`, `Block`, `TinyLLM` |
-| [`tokenizer.py`](/docs/api/tokenizer) | 241 | Byte-level BPE — training, encode/decode, fast export | `BPETokenizer`, `SPLIT_PATTERN`, `ENDOFTEXT` |
+| [`model.py`](/docs/api/model) | 217 | The transformer, RoPE, KV cache, generation | `RMSNorm`, `precompute_rope`, `apply_rope`, `KVCache`, `Attention`, `SwiGLU`, `Block`, `TinyLLM` |
+| [`tokenizer.py`](/docs/api/tokenizer) | 248 | Byte-level BPE — training, encode/decode, fast export | `BPETokenizer`, `SPLIT_PATTERN`, `ENDOFTEXT` |
 | [`data.py`](/docs/api/data) | 100 | uint16 token shards and memmapped sampling | `ShardWriter`, `TokenShards`, `INDEX_NAME` |
-| [`muon.py`](/docs/api/muon) | 81 | The Muon optimizer and the parameter split | `zeropower_via_newtonschulz5`, `Muon`, `build_optimizers` |
-| [`train.py`](/docs/api/train) | 261 | The pretraining loop, WSD schedule, DDP, checkpoints | `lr_scale`, `run`, `main`, `PEAK_FLOPS` |
+| [`muon.py`](/docs/api/muon) | 91 | The Muon optimizer and the parameter split | `zeropower_via_newtonschulz5`, `Muon`, `build_optimizers` |
+| [`train.py`](/docs/api/train) | 289 | The pretraining loop, WSD schedule, DDP, checkpoints, MFU | `lr_scale`, `run`, `main`, `PEAK_FLOPS` |
 | [`sample.py`](/docs/api/sample-and-eval#tinyllmsample) | 49 | Loading a checkpoint and generating text | `load_model`, `main` |
 | [`eval_hellaswag.py`](/docs/api/sample-and-eval#tinyllmeval_hellaswag) | 68 | HellaSwag continuation-likelihood eval | `ending_losses`, `main` |
 

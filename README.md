@@ -27,7 +27,7 @@ Optimization uses a **Muon + AdamW hybrid**: Muon (momentum + Newton-Schulz orth
 
 ```bash
 uv sync
-uv run pytest -q                    # 57 tests, a few seconds
+uv run pytest -q                    # 58 tests, a few seconds
 ```
 
 The test suite covers every component (tokenizer, model, Muon, data sharding, training loop, eval) against hand-derived reference implementations, and needs no downloaded data.
@@ -36,7 +36,7 @@ To exercise the full training loop end-to-end on a laptop, use the `smoke` confi
 
 ```bash
 uv run python scripts/prepare_data.py --data-dir data/smoke \
-    --max-tokens 20_000_000 --val-tokens 1_000_000 --shard-tokens 20_000_000
+    --max-tokens 60000000 --val-tokens 2000000 --shard-tokens 25000000
 uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json
 ```
 
@@ -77,7 +77,7 @@ uv run python scripts/prepare_data.py \
 1. `uv sync`
 2. `uv run pytest -q` — confirm the suite is green.
 3. Train a tokenizer on a small byte budget (a few minutes): `uv run python scripts/train_tokenizer.py --max-bytes 20_000_000`.
-4. Prepare a small shard set: `uv run python scripts/prepare_data.py --data-dir data/smoke --max-tokens 20_000_000 --val-tokens 1_000_000 --shard-tokens 20_000_000`.
+4. Prepare a small shard set: `uv run python scripts/prepare_data.py --data-dir data/smoke --max-tokens 60000000 --val-tokens 2000000 --shard-tokens 25000000`.
 5. Train: `uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json` — logs to `out/smoke/log.csv`, checkpoints to `out/smoke/ckpt_last.pt`, periodic sample generations printed to stdout.
 6. Sample from the checkpoint: `uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"`.
 
