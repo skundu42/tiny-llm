@@ -108,7 +108,9 @@ disabled automatically off CUDA and precision falls back to fp32, so no flags ar
 needed on a Mac.
 
 Progress goes to stdout and to `out/smoke/log.csv` (`step, split, loss, lr_scale,
-tok_per_sec`); checkpoints land in `out/smoke/ckpt_last.pt`.
+tok_per_sec, mfu` — `mfu` is only populated on CUDA against a recognized GPU;
+on Apple Silicon it is always empty); checkpoints land in
+`out/smoke/ckpt_last.pt`.
 
 ### What a real run looks like
 

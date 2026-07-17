@@ -201,7 +201,8 @@ the effective batch constant across hardware.
 
 `--tokenizer` is optional; passing it enables the periodic sample prints at
 `sample_every = 200`. Progress goes to stdout and to `out/smoke/log.csv`
-(`step, split, loss, lr_scale, tok_per_sec`); checkpoints land in
+(`step, split, loss, lr_scale, tok_per_sec, mfu` — `mfu` stays empty off CUDA,
+so every row from this MPS run has it blank); checkpoints land in
 `out/smoke/ckpt_last.pt` every 200 steps.
 
 ### The measured curve

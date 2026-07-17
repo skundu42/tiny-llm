@@ -3,10 +3,10 @@ title: tinyllm.train
 description: lr_scale, run, main and PEAK_FLOPS — the pretraining entry point, its return value, and the full CLI
 ---
 
-261 lines: `tinyllm/train.py`. bf16 autocast, gradient accumulation, the WSD
+289 lines: `tinyllm/train.py`. bf16 autocast, gradient accumulation, the WSD
 schedule, Muon+AdamW, DDP via `torchrun`, atomic checkpoints with bit-exact
-resume. [The training loop](/docs/training) walks the internals; this page is the
-signature reference.
+resume, inline MFU. [The training loop](/docs/training) walks the internals;
+this page is the signature reference.
 
 ## `PEAK_FLOPS`
 
@@ -14,16 +14,27 @@ signature reference.
 PEAK_FLOPS = {"NVIDIA H100": 989e12, "NVIDIA A100": 312e12}
 ```
 
-**Type:** `dict[str, float]`. Dense bf16 peak FLOP/s, provided as a reference
-constant for computing MFU **offline** — the loop logs raw `tok/s` and never
-touches this dict:
+**Type:** `dict[str, float]`. Dense bf16 peak FLOP/s for each recognized GPU.
+`_peak_flops(device)` looks up the current GPU in this dict by matching
+`torch.cuda.get_device_name()` against each key **by substring** — a real
+device name like `"NVIDIA H100 80GB HBM3"` contains the key `"NVIDIA H100"`.
+Off CUDA, or on a GPU that matches no key, it returns `None` and MFU is left
+uncomputable for that run rather than guessed.
 
-```
-MFU ≈ (6 × N × tokens_per_sec) / peak_flops
+The master-rank logging branch uses it to compute MFU inline, every
+`log_every` steps:
+
+```python
+flops_per_token = 6 * N + 12 * mc.n_layer * mc.d_model * mc.seq_len
+mfu = flops_per_token * tok_s / peak_flops if peak_flops else None
 ```
 
-At `d26`'s 489M parameters and 139k tok/s: `6 × 489e6 × 139e3 / 989e12` ≈ **41%**.
-See [MFU](/docs/training#logging-throughput-and-mfu).
+`N` is `raw_model.num_params(non_embedding=True)`, computed once outside the
+loop. At `d26`'s 447,354,368 non-embedding parameters, `flops_per_token ≈
+3.50e9`; at a hypothetical 139k tok/s on an H100 that is `3.50e9 × 139e3 /
+989e12` ≈ **49%** MFU — an illustrative number, not a measured one, since this
+repo has not yet run the full `d26` config on real hardware. See
+[MFU](/docs/training#logging-throughput-and-mfu).
 
 ## `lr_scale`
 
@@ -198,8 +209,13 @@ uv run python -m tinyllm.train --config smoke --device cpu --steps 20
 ### `log.csv`
 
 Written to `{out_dir}/log.csv` by the master rank, flushed on every write. The
-real first rows of the [recorded smoke run](/docs/runbooks/local-smoke)'s
-`out/smoke/log.csv`:
+header is now `step,split,loss,lr_scale,tok_per_sec,mfu` — the `mfu` column was
+added alongside the inline MFU computation above, written as an empty string
+whenever it is not computable (anything off CUDA, or a GPU not in
+`PEAK_FLOPS`). The real first rows of the [recorded smoke
+run](/docs/runbooks/local-smoke)'s `out/smoke/log.csv` predate that column —
+they were captured against the old 5-column header, on MPS where `mfu` would
+have been empty regardless:
 
 ```
 step,split,loss,lr_scale,tok_per_sec
@@ -210,9 +226,9 @@ step,split,loss,lr_scale,tok_per_sec
 99,val,6.727361,,
 ```
 
-`val` rows leave `lr_scale` and `tok_per_sec` empty. Losses are written at `.6f`
-here while stdout prints `.4f`, so the CSV is the more precise record of the same
-number.
+`val` rows leave `lr_scale`, `tok_per_sec`, and `mfu` empty. Losses are written
+at `.6f` here while stdout prints `.4f`, so the CSV is the more precise record
+of the same number.
 
 <Callout type="warn">
   **Ignore the first row's `tok_per_sec`.** `tok_s = tc.batch_tokens *

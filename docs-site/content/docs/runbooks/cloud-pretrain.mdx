@@ -156,15 +156,19 @@ Let it run ~15 minutes, then check **three things**:
 
 | Check | Expected | If it fails |
 |---|---|---|
-| **Header line** | `params: 489,297,408 \| device cuda \| world 1 \| grad_accum 16 \| steps 200` | Wrong param count = wrong config; `grad_accum` ≠ 16 = wrong `micro_batch_size` |
+| **Header line** | `params: 489,297,408 \| device cuda \| world 1 \| grad_accum 32 \| steps 200` | Wrong param count = wrong config; `grad_accum` ≠ 32 = wrong `micro_batch_size` |
 | **Throughput** | **≥ ~100,000 tok/s** on a single H100 | See below |
 | **Loss by step 100** | **falling, below ~7** (from ~10.4 at step 0) | Something is broken — do not proceed |
 
 **On throughput:** ≥100k tok/s is the floor for the run to finish in a sane time,
-and it corresponds to ~30% MFU (`6 × 489M × 100,000 ≈ 294 TFLOP/s` against the
-H100's 989 TFLOP/s dense bf16 peak — see
+and it corresponds to ~35% MFU (`flops_per_token × 100,000 ≈ 350 TFLOP/s`
+against the H100's 989 TFLOP/s dense bf16 peak, using the same `6 × N + 12 ×
+n_layer × d_model × seq_len` estimate the loop logs as `mfu` — see
 [MFU](/docs/training#logging-throughput-and-mfu)). The **20-hour estimate
-assumes ~139k tok/s (~41% MFU)**. If you are seeing 40k, something is wrong —
+assumes ~139k tok/s (~49% MFU)**. These percentages are illustrative, not
+measured — this repo has not yet run `d26` on real hardware; the run's own
+`log.csv` `mfu` column is the actual figure once it has. If you are seeing 40k,
+something is wrong —
 most likely `torch.compile` silently disabled (check for the `torch.compile
 disabled: not on CUDA` line) or fp32 instead of bf16 (`dtype: "auto"` picks bf16
 only on CUDA). At 15 minutes you will have covered ~170-240 steps at these rates,
@@ -211,8 +215,10 @@ uv run python -m tinyllm.train --config d26 \
 ```
 
 `--wandb` sets `wandb_project`; empty (the default) disables it entirely. The
-master rank logs `train/loss`, `lr_scale`, `tok_per_sec`, and `val/loss`, with the
-full model and train config captured as the run's config.
+master rank logs `train/loss`, `lr_scale`, `tok_per_sec`, `mfu` (when
+computable — CUDA against a recognized GPU in `PEAK_FLOPS`, which an H100 is),
+and `val/loss`, with the full model and train config captured as the run's
+config.
 
 ### Multi-GPU
 
@@ -224,15 +230,15 @@ uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
 ```
 
 Nothing else changes, and that is the design. `batch_tokens` is the invariant and
-`grad_accum` absorbs the world size — `524,288 / (8 × 16 × 2048) = 2` instead of
-16 — so **the effective batch, the loss trajectory, and every hyperparameter are
+`grad_accum` absorbs the world size — `524,288 / (8 × 8 × 2048) = 4` instead of
+32 — so **the effective batch, the loss trajectory, and every hyperparameter are
 identical**. You are buying wall-clock, not a different run. See
 [Distributed](/docs/training/distributed).
 
 ## Step 6: Monitor
 
 `out/d26/log.csv` is the source of truth — `step, split, loss, lr_scale,
-tok_per_sec`, flushed on every write:
+tok_per_sec, mfu`, flushed on every write:
 
 ```bash
 tail -f out/d26/log.csv
@@ -250,8 +256,10 @@ What to watch, in priority order:
 
 - **Val loss falling.** The only number that matters. It should drop fast early,
   then grind. Expect ~3.5-4 by a few thousand steps and **2.7-3.0 at the end**.
-- **`tok_per_sec` stable.** A gradual decline suggests thermal throttling or a
-  noisy neighbor; a cliff suggests something else landed on the box.
+- **`tok_per_sec` stable, `mfu` alongside it.** A gradual decline suggests
+  thermal throttling or a noisy neighbor; a cliff suggests something else
+  landed on the box. `mfu` is populated automatically on an H100 (it is in
+  `PEAK_FLOPS`) and gives the same signal as a normalized percentage.
 - **Loss spikes.** Occasional small ones are normal and
   [gradient clipping](/docs/training#gradient-clipping) (`grad_clip = 1.0`)
   is there to ride them out. A spike that does not recover within a few hundred
@@ -373,7 +381,7 @@ Print this.
 - [ ] `uv run pytest -q` green
 - [ ] **Skip the tokenizer** — `tokenizer/tokenizer.json` is committed
 - [ ] `uv run python scripts/prepare_data.py` finished with a `done:` line, ~19 GiB on disk
-- [ ] Dress rehearsal: `params: 489,297,408`, `grad_accum 16`, **≥100k tok/s**, loss **< 7 by step 100**
+- [ ] Dress rehearsal: `params: 489,297,408`, `grad_accum 32`, **≥100k tok/s**, loss **< 7 by step 100**
 - [ ] `rm -rf out/rehearsal`
 - [ ] Real run launched **inside `tmux`**, detached with `Ctrl-b d`
 - [ ] `tail -f out/d26/log.csv` shows val loss falling

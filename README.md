@@ -119,7 +119,7 @@ Steps on a fresh Ubuntu GPU box (Lambda Labs, RunPod, etc.):
    ```bash
    uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json --resume
    ```
-7. Monitor progress via `out/d26/log.csv` (or Weights & Biases, if `--wandb <project>` was passed) — step, train/val loss, LR scale, tokens/sec.
+7. Monitor progress via `out/d26/log.csv` (or Weights & Biases, if `--wandb <project>` was passed) — step, train/val loss, LR scale, tokens/sec, and MFU (populated on CUDA against a recognized GPU).
 8. Once trained, evaluate and sample from the final checkpoint:
    ```bash
    uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --limit 1000

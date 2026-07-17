@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 import os
 import time
 from contextlib import nullcontext
@@ -39,6 +38,19 @@ def _pick_device() -> str:
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def _peak_flops(device: str) -> float | None:
+    """Dense bf16 peak FLOP/s for the current GPU, matched by substring against
+    `PEAK_FLOPS`. Returns None off-CUDA or for an unrecognized GPU, in which
+    case MFU is not computable."""
+    if not device.startswith("cuda") or not torch.cuda.is_available():
+        return None
+    name = torch.cuda.get_device_name()
+    for key, peak in PEAK_FLOPS.items():
+        if key in name:
+            return peak
+    return None
 
 
 def _autocast_ctx(device: str, dtype: str):
@@ -127,6 +139,14 @@ def run(
 
         tokenizer = BPETokenizer.load(tokenizer_path)
 
+    # MFU estimate (standard transformer FLOPs/token accounting): 6*N for the
+    # matmuls (forward + backward, N = non-embedding params) plus the
+    # attention term 12*n_layer*d_model*seq_len. Only meaningful on CUDA with a
+    # recognized GPU in PEAK_FLOPS; otherwise mfu is left uncomputable (None).
+    non_embed_params = raw_model.num_params(non_embedding=True)
+    flops_per_token = 6 * non_embed_params + 12 * mc.n_layer * mc.d_model * mc.seq_len
+    peak_flops = _peak_flops(device)
+
     if master:
         os.makedirs(tc.out_dir, exist_ok=True)
         log_path = os.path.join(tc.out_dir, "log.csv")
@@ -134,7 +154,7 @@ def run(
         log_file = open(log_path, "a", newline="")
         log = csv.writer(log_file)
         if new_log:
-            log.writerow(["step", "split", "loss", "lr_scale", "tok_per_sec"])
+            log.writerow(["step", "split", "loss", "lr_scale", "tok_per_sec", "mfu"])
         wandb_run = None
         if tc.wandb_project:
             import wandb
@@ -190,12 +210,20 @@ def run(
             now = time.time()
             tok_s = tc.batch_tokens * tc.log_every / max(now - t_last, 1e-9)
             t_last = now
-            print(f"step {step:6d} | loss {loss_accum:.4f} | lr× {scale:.3f} | {tok_s:,.0f} tok/s")
-            log.writerow([step, "train", f"{loss_accum:.6f}", f"{scale:.4f}", f"{tok_s:.0f}"])
+            mfu = flops_per_token * tok_s / peak_flops if peak_flops else None
+            mfu_str = f"{mfu:.4f}" if mfu is not None else ""
+            mfu_print = f" | mfu {mfu * 100:.1f}%" if mfu is not None else ""
+            print(f"step {step:6d} | loss {loss_accum:.4f} | lr× {scale:.3f} | "
+                  f"{tok_s:,.0f} tok/s{mfu_print}")
+            log.writerow([step, "train", f"{loss_accum:.6f}", f"{scale:.4f}",
+                          f"{tok_s:.0f}", mfu_str])
             log_file.flush()
             if tc.wandb_project and wandb_run:
-                wandb_run.log({"train/loss": loss_accum, "lr_scale": scale,
-                               "tok_per_sec": tok_s}, step=step)
+                wandb_log = {"train/loss": loss_accum, "lr_scale": scale,
+                             "tok_per_sec": tok_s}
+                if mfu is not None:
+                    wandb_log["mfu"] = mfu
+                wandb_run.log(wandb_log, step=step)
             history.append((step, loss_accum))
 
         if (step + 1) % tc.val_every == 0 or step == tc.total_steps - 1:
@@ -203,7 +231,7 @@ def run(
             final_val = vl
             if master:
                 print(f"step {step:6d} | val loss {vl:.4f}")
-                log.writerow([step, "val", f"{vl:.6f}", "", ""])
+                log.writerow([step, "val", f"{vl:.6f}", "", "", ""])
                 log_file.flush()
                 if tc.wandb_project and wandb_run:
                     wandb_run.log({"val/loss": vl}, step=step)
