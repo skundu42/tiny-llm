@@ -1,4 +1,4 @@
 {
   "title": "Runbooks",
-  "pages": ["local-smoke", "cloud-pretrain", "custom-dataset"]
+  "pages": ["first-run", "local-smoke", "local-full-train", "cloud-pretrain", "custom-dataset"]
 }

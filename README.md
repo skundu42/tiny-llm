@@ -76,6 +76,8 @@ Both `train_tokenizer.py` and `prepare_data.py` also accept `--dataset`, `--data
 
 ## Local smoke runbook
 
+Training a model for the first time? The docs site has a from-zero walkthrough (Runbooks > Your first training run) that explains every step below in detail, including installing the tools. The condensed version:
+
 1. `uv sync`
 2. `uv run pytest -q`: confirm the suite is green.
 3. Train a tokenizer on a small byte budget (a few minutes): `uv run python scripts/train_tokenizer.py --max-bytes 20_000_000`.
@@ -84,6 +86,19 @@ Both `train_tokenizer.py` and `prepare_data.py` also accept `--dataset`, `--data
 6. Sample from the checkpoint: `uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"`.
 
 This whole loop runs on CPU or Apple Silicon MPS and needs no GPU: `torch.compile` is automatically disabled off-CUDA (no `--no-compile` flag needed), and precision falls back to fp32 when `--dtype` is left at its `auto` default.
+
+## Fully local training
+
+The smoke run above is deliberately undertrained (~0.75 tokens per parameter). The same config trained to its full ~20 tokens-per-parameter budget (16,000 steps, ~262M tokens) is an overnight run on the same laptop, roughly 5.5-6.5 hours at the recorded MPS throughput:
+
+```bash
+uv run python scripts/prepare_data.py --data-dir data/fineweb-275m --max-tokens 275000000
+caffeinate -is uv run python -m tinyllm.train --config smoke \
+    --tokenizer tokenizer/tokenizer.json \
+    --data-dir data/fineweb-275m --out-dir out/smoke-full --steps 16000
+```
+
+The docs site runbook (Runbooks > Fully local training) has the full arithmetic, what to expect from the curve, and how to size a ~50M-parameter custom preset that still trains locally.
 
 ## Cloud runbook
 

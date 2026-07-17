@@ -1,0 +1,234 @@
+---
+title: Fully local training
+description: Take a small model to its full compute-optimal token budget entirely on a MacBook Pro, overnight for the smoke config, and size a larger custom preset with a measured rehearsal instead of guesswork
+---
+
+The [smoke run](/docs/runbooks/local-smoke) proves the pipeline in 15 minutes,
+but it is deliberately undertrained: 600 steps is ~9.8M tokens for a
+13.1M-parameter model, about **0.75 tokens per parameter**, when the
+[Chinchilla scaling result](https://arxiv.org/abs/2203.15556) puts the
+compute-optimal budget near **20 tokens per parameter**. The
+[cloud runbook](/docs/runbooks/cloud-pretrain) fixes that with a rented H100.
+This page is the third option: **train a model to its full token budget without
+renting anything**, on the same MacBook Pro the smoke numbers were recorded on.
+
+The trainer makes this a matter of arithmetic, not new code. `--steps`,
+`--data-dir`, and `--out-dir` override any preset, and the
+[WSD schedule](/docs/training#the-wsd-learning-rate-schedule) derives its decay
+point from the step count automatically, so a longer run keeps the right
+schedule shape without touching config.
+
+<Callout type="info">
+  Honesty note. Unlike the smoke runbook, this exact run has no recorded
+  end-to-end numbers yet. Everything below is either a **measurement** from the
+  recorded smoke run (throughput, the first 600 steps of the curve), plain
+  **arithmetic** on top of it, or an explicitly labeled **projection**. Your
+  `log.csv` becomes the first recording.
+</Callout>
+
+## The arithmetic of "fully trained"
+
+For the 13,111,296-parameter `smoke` model:
+
+| Quantity | Value | Where it comes from |
+|---|---|---|
+| Token budget | ~262M tokens | 13,111,296 params × 20 tokens/param = 262,225,920 |
+| Steps | **16,000** | 262M ÷ 16,384 `batch_tokens`; 16,000 × 16,384 = 262,144,000 (20.0 tok/param) |
+| Throughput | 11,000-13,400 tok/s | **measured** on the recorded M3 Pro (MPS) smoke run |
+| Wall clock | **≈5.5-6.5 hours** | 262,144,000 ÷ throughput; ~5.7 h at the recorded median 12,781 tok/s |
+| Shards on disk | ~550 MB | 275M tokens × 2 bytes (uint16) |
+| Text streamed | ~1.2 GB | 275M tokens × 4.517 bytes/token |
+
+In other words: **the fully trained version of the smoke model is an overnight
+run**. Start it before dinner, read the curve over coffee.
+
+## Step 1: Prepare a compute-optimal shard set
+
+The smoke shard set (60M tokens) is too small for a 262M-token run without
+repetition, so prepare a bigger one. One flag changes from the default:
+
+```bash
+uv run python scripts/prepare_data.py --data-dir data/fineweb-275m \
+    --max-tokens 275000000
+```
+
+`--val-tokens` stays at its 10M default, leaving ~265M training tokens: just
+above the 262.1M the run consumes, so **no document is seen twice**, the same
+single-epoch property the `d26` recipe has. Unlike the smoke prep, this one is
+big enough to show progress lines (at 100M and 200M tokens) before the `done:`
+summary.
+
+## Step 2: Launch it overnight
+
+```bash
+caffeinate -is uv run python -m tinyllm.train --config smoke \
+    --tokenizer tokenizer/tokenizer.json \
+    --data-dir data/fineweb-275m \
+    --out-dir out/smoke-full \
+    --steps 16000
+```
+
+Compared to the 15-minute run, three flags changed and one word appeared:
+
+- `--steps 16000` sets the schedule: warmup stays at the preset's 20 steps
+  (same LR, same batch, so the early dynamics are the ones the recorded run
+  already validated), the plateau stretches, and decay begins at step 12,800
+  (`int(16000 × 0.8)`).
+- `--data-dir` / `--out-dir` point at the new shards and keep the artifacts
+  away from `out/smoke`.
+- **`caffeinate -is`** (macOS) keeps the machine from idle-sleeping mid-run.
+  Leave the lid open and the power connected; a MacBook that goes to sleep
+  stops training, and closing the lid puts it to sleep regardless of
+  `caffeinate`.
+
+Practicalities for a laptop run:
+
+- **Interruptions are cheap.** The `smoke` preset checkpoints every 200 steps,
+  which at recorded throughput is about every 4 minutes. Anything that kills
+  the run costs at most that; relaunch the same command with `--resume` and it
+  continues [bit-exactly](/docs/training/checkpointing).
+- **`log.csv` is the dashboard.** `tail -f out/smoke-full/log.csv`, or
+  `grep ',val,' out/smoke-full/log.csv` for just the validation curve. A slow
+  decline in `tok_per_sec` over hours is thermal throttling; the run is still
+  correct, just later.
+- The machine stays usable, but heavy work competes for the GPU and shows up
+  in `tok_per_sec`.
+
+## What to expect
+
+**The first 600 steps are a known quantity.** Same config, same tokenizer, same
+data recipe, same LR plateau, so your curve should land in the neighborhood of
+the recorded run's: ~10.44 at step 0, ~6.7 by step 100, low 5s around step 600.
+If it does not, stop and debug before spending the night; the
+[smoke runbook](/docs/runbooks/local-smoke#what-the-numbers-say) is the
+reference.
+
+**After step 600 you are in unrecorded territory.** The run has 26× the recorded
+run's tokens, so the final validation loss will land well below its 5.50;
+somewhere in the high 4s is a reasonable projection, not a promise. Treat
+whatever your `log.csv` says as the first real measurement of this
+configuration. Two things worth doing with the finished checkpoint:
+
+```bash
+uv run python -m tinyllm.sample --ckpt out/smoke-full/ckpt_last.pt \
+    --tokenizer tokenizer/tokenizer.json --prompt "Photosynthesis is"
+
+uv run python -m tinyllm.eval_hellaswag --ckpt out/smoke-full/ckpt_last.pt \
+    --tokenizer tokenizer/tokenizer.json --limit 1000
+```
+
+Samples should read noticeably more coherent than the
+[15-minute checkpoint's](/docs/runbooks/local-smoke#sample-generations), and
+still far from factual. On HellaSwag, expect `acc_norm` around chance (0.25):
+13M parameters is below the scale where that benchmark moves, and that is a
+statement about the scale, not a bug. See
+[Evaluation](/docs/evaluation#what-to-expect-at-this-scale).
+
+## A bigger model, still local
+
+Between `smoke` (13M) and `d26` (489M) there is room for a preset that only a
+config entry away. The CLI restricts `--config` to the presets in
+`tinyllm/config.py`, so a mid-size model means adding one. For example, a
+**50,608,128-parameter** model (the count comes from instantiating it and
+calling the model's own `num_params()`, printed by the snippet below):
+
+```python
+# tinyllm/config.py
+MODEL_PRESETS: dict[str, ModelConfig] = {
+    "d26": ModelConfig(),
+    "smoke": ModelConfig(n_layer=6, n_head=4, n_kv_head=2, d_model=256, d_ff=768, seq_len=512),
+    "mid": ModelConfig(n_layer=12, n_head=8, n_kv_head=2, d_model=512, d_ff=1408, seq_len=1024),
+}
+
+TRAIN_PRESETS: dict[str, TrainConfig] = {
+    "d26": TrainConfig(),
+    "smoke": TrainConfig(...),  # unchanged
+    "mid": TrainConfig(
+        data_dir="data/mid",
+        batch_tokens=65_536,
+        micro_batch_size=8,
+        total_steps=15_500,       # 15,500 × 65,536 ≈ 1.016B tokens ≈ 20 tok/param
+        warmup_steps=250,
+        compile=False,
+        out_dir="out/mid",
+        val_every=250,
+        ckpt_every=500,
+        sample_every=500,
+    ),
+}
+```
+
+The shape choices follow the existing presets rather than inventing anything:
+head_dim stays 64 (`d_model / n_head`), the GQA ratio and the ~2.75× SwiGLU
+width match `d26`, the optimizer hyperparameters are untouched because the same
+values train both existing scales, and `warmup_steps=250` matches what `d26`
+uses for a similar step count. Verify the parameter count yourself before
+trusting it:
+
+```bash
+uv run python -c "
+from tinyllm.config import MODEL_PRESETS
+from tinyllm.model import TinyLLM
+m = TinyLLM(MODEL_PRESETS['mid'])
+print(f'{m.num_params():,} total, {m.num_params(non_embedding=True):,} non-embedding')"
+```
+
+```
+50,608,128 total, 33,830,912 non-embedding
+```
+
+### Measure before you commit
+
+Here the honest method matters more than the numbers: **MPS throughput for this
+shape is unmeasured**, and a wall-clock guess compounds into a day either way.
+So do what the [cloud runbook](/docs/runbooks/cloud-pretrain#step-4-the-15-minute-dress-rehearsal)
+does before spending money, except you are spending hours:
+
+```bash
+# ~1.05B-token shard set: ~2.1 GB on disk, ~4.7 GB of text streamed
+uv run python scripts/prepare_data.py --data-dir data/mid \
+    --max-tokens 1050000000
+
+# 15-minute rehearsal
+uv run python -m tinyllm.train --config mid \
+    --tokenizer tokenizer/tokenizer.json \
+    --out-dir out/mid-rehearsal --steps 200
+```
+
+Check the header says `grad_accum 8` (65,536 ÷ (8 × 1024)) and loss starts near
+10.4, then read `tok_per_sec` from `out/mid-rehearsal/log.csv` and do the
+division yourself:
+
+```
+hours = 15,500 × 65,536 / tok_per_sec / 3600
+```
+
+Purely as labeled hypotheticals: 10,000 tok/s puts the full budget at ~28
+hours, a long weekend with a checkpoint every ~55 minutes (500 steps × 65,536
+tokens); 6,000 tok/s puts it at ~47 hours, at which point it is worth deciding
+whether you want this model at all. Then `rm -rf out/mid-rehearsal` and launch the real run the same way as
+the smoke-full run above (in `caffeinate -is`, with `--resume` after any
+interruption).
+
+### If the hours are unacceptable
+
+Cut the token budget, not the batch or the LR. `--steps 7750` halves the run
+to ~10 tokens per parameter; the model will be undertrained relative to
+compute-optimal, but Chinchilla is a guideline for minimizing loss per FLOP,
+not a law about usefulness. The trade to understand: a fully trained 13M model
+and a half-trained 50M model cost similar wall clock, and which wins on
+validation loss is exactly the kind of question this repo exists to let you
+answer with a `log.csv` instead of a citation. (Keep the decay: `--steps` moves
+the decay point with it, so a shorter run still ends cooled down.)
+
+## Where this leaves you
+
+| Run | Params | Tokens | Hardware | Wall clock |
+|---|---|---|---|---|
+| [Smoke](/docs/runbooks/local-smoke) | 13.1M | 9.8M (0.75/param) | MacBook Pro | **15 min** (measured) |
+| **Smoke, full budget (this page)** | 13.1M | 262M (20/param) | MacBook Pro | **≈5.5-6.5 h** (from measured tok/s) |
+| **`mid`, full budget (this page)** | 50.6M | ~1.0B (20/param) | MacBook Pro | measure with the rehearsal |
+| [`d26`](/docs/runbooks/cloud-pretrain) | 489M | ~10B (20.4/param) | rented H100 | ≈20 h, ~$60 |
+
+The ladder is the point: every rung is the same code path, and each one only
+changes the config and the patience.

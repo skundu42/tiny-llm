@@ -1,0 +1,319 @@
+---
+title: Your first training run
+description: A from-zero walkthrough for people who have never trained a language model before, from installing the tools to sampling text from a model you trained yourself
+---
+
+This runbook assumes you have never trained a model of any kind. It walks the
+same sequence as the [local smoke run](/docs/runbooks/local-smoke), but where
+that page compresses each step to its command and its measured output, this one
+explains what each command does, why the step exists at all, what you should see
+while it runs, and what to do when you see something else. If you have trained
+models before, skip straight to the smoke runbook; the commands are identical.
+
+By the end you will have trained a real 13.1M-parameter transformer on your own
+machine, watched its loss fall from "knows nothing" to "writes English", and
+sampled text from it. Total hands-on time is under an hour, most of it waiting.
+
+## What you need
+
+- A Mac (Apple Silicon is what the recorded numbers come from) or a Linux
+  machine. On Windows, WSL2 is the safest route.
+- About 2 GB of free disk, to be comfortable. The artifacts themselves are
+  ~120 MB of token shards plus a ~130 MB checkpoint (weights and optimizer
+  state).
+- An internet connection for the data step, which streams roughly 270 MB of
+  text.
+- Basic comfort with a terminal: running commands and changing directories.
+
+You do **not** need a GPU, CUDA, a HuggingFace account, a Python installation,
+or any machine-learning background.
+
+## The route
+
+| Step | What happens | Rough time |
+|---|---|---|
+| 1. Install the tools | `git` and `uv` | a few minutes |
+| 2. Get the code | clone the repo, install dependencies | a few minutes |
+| 3. Prove the install | run the 58-test suite | seconds |
+| 4. The tokenizer | nothing; it ships with the repo | zero |
+| 5. Prepare the data | stream text, encode it into token shards | minutes, mostly download |
+| 6. Train | 600 optimization steps | ~15 min on Apple Silicon, longer on CPU |
+| 7. Sample | generate text from your checkpoint | seconds |
+
+## A 60-second mental model
+
+A language model is a function that reads a sequence of **tokens** (small chunks
+of text, a few characters each) and outputs a probability for every possible
+next token. Training means showing it billions of real next-token examples and
+nudging its parameters toward the right answer each time. Everything below
+serves that loop:
+
+- The **tokenizer** converts between text and token ids. Ours has 32,768
+  distinct tokens. See [Tokenizer](/docs/tokenizer).
+- The **data step** runs the tokenizer over a corpus once, up front, and stores
+  the resulting ids in flat binary files called **shards**, so training never
+  touches raw text. See [Data pipeline](/docs/data).
+- **Training** repeatedly samples chunks of tokens from the shards, asks the
+  model to predict each next token, measures how wrong it was (the **loss**),
+  and updates the parameters. See [The training loop](/docs/training).
+- A **checkpoint** is the model's parameters saved to disk, so you can stop,
+  resume, and generate text later.
+- **Sampling** runs the trained model in a loop: predict a distribution over
+  the next token, pick one, append it, repeat. See [Inference](/docs/inference).
+
+## Step 1: Install the tools
+
+You need `git` (to get the code) and [uv](https://docs.astral.sh/uv/) (which
+manages Python and every dependency for you). Check what you already have:
+
+```bash
+git --version
+uv --version
+```
+
+macOS ships `git` (the first run may prompt you to install the command line
+tools; accept). On Debian/Ubuntu, `sudo apt install git`. If `uv` is missing:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+(or `brew install uv` on macOS). The installer puts `uv` in `~/.local/bin`; if
+`uv --version` still says command not found afterwards, open a new terminal or
+run `export PATH="$HOME/.local/bin:$PATH"`.
+
+You do not need to install Python yourself. The project requires Python 3.12+
+(`pyproject.toml` pins `requires-python = ">=3.12"`), and `uv` downloads a
+suitable interpreter automatically if your system lacks one.
+
+## Step 2: Get the code
+
+```bash
+git clone <repo-url> tiny-llm
+cd tiny-llm
+uv sync
+```
+
+`uv sync` reads `pyproject.toml`, creates an isolated virtual environment inside
+the project (a `.venv` directory), and installs exact pinned versions of every
+dependency: PyTorch, NumPy, `datasets`, and a few others. It does not touch
+anything outside the project directory.
+
+From here on, every command is prefixed with `uv run`, which executes it inside
+that environment. There is nothing to activate and no global state to manage;
+that is the entire reason this project uses `uv`.
+
+## Step 3: Prove the install works
+
+```bash
+uv run pytest -q
+```
+
+Expected output, after a few seconds:
+
+```
+58 passed in ...s
+```
+
+This is not a formality. The suite checks every component against independently
+derived references: attention against a naive reference implementation, the
+model's parameter counts to the exact digit, checkpoint resume for bit-exactness,
+and more. It needs no network and no data. If it is green, every later step is
+running verified code, and any problem you hit afterwards is environmental
+(disk, network) rather than a bug you have to diagnose. If it is not green, stop
+and fix that first; nothing downstream will behave.
+
+## Step 4: The tokenizer, which is already done for you
+
+The pipeline needs a trained tokenizer before it can encode anything, and the
+repo ships one: `tokenizer/tokenizer.json`, a committed artifact. It is a
+byte-level BPE with a 32,768-token vocabulary, trained on 250 MB of FineWeb-Edu
+text, compressing held-out documents at a measured 4.517 bytes per token.
+
+**Do not train your own for this walkthrough.** A tokenizer defines what the
+token ids mean, so a checkpoint is only meaningful together with the exact
+tokenizer it trained on, and every recorded number in these docs uses the
+committed one. Reproducing it is [step 2 of the smoke
+runbook](/docs/runbooks/local-smoke#step-2-train-the-canonical-tokenizer) if you
+want it later.
+
+If you want proof the artifact is sane before trusting it, this round-trip check
+takes a second:
+
+```bash
+uv run python -c "
+from tinyllm.tokenizer import BPETokenizer
+t = BPETokenizer.load('tokenizer/tokenizer.json')
+s = 'My first language model.'
+assert t.decode(t.encode(s)) == s
+print('vocab', t.vocab_size, '| round-trip ok')"
+```
+
+## Step 5: Prepare the training data
+
+```bash
+uv run python scripts/prepare_data.py --data-dir data/smoke \
+    --max-tokens 60000000 --val-tokens 2000000 --shard-tokens 25000000
+```
+
+What this does: it streams documents from
+[FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu), a
+public corpus of educational web text (no account or login needed), encodes each
+one with the tokenizer, and writes the ids into binary shard files under
+`data/smoke/`. The flags, in plain words:
+
+- `--max-tokens 60000000`: stop after roughly 60 million tokens. At the
+  tokenizer's 4.517 bytes per token, that is about 270 MB of raw text, which is
+  what bounds the download.
+- `--val-tokens 2000000`: route the first ~2M tokens to a held-out
+  **validation** split. The model never trains on these; they exist so you can
+  check it is learning general English rather than memorizing its training
+  data.
+- `--shard-tokens 25000000`: cap each shard file at 25M tokens.
+
+What you will see, in order: `datasets` download progress, then the line
+
+```
+fast tokenizer verified token-identical on 200 docs
+```
+
+then **silence until the end**, and finally:
+
+```
+done: 60,003,098 tokens (2,004,611 val, 57,998,487 train) in data/smoke
+```
+
+<Callout type="info">
+  The silence is normal. The script prints a progress line every 100M tokens,
+  and this run stops at 60M, so the first progress line you would see is the
+  `done:` summary. If the process is alive and your network is moving, it is
+  working.
+</Callout>
+
+Two details worth knowing. The "fast tokenizer verified" line means the script
+checked that the fast Rust encoder produces byte-identical output to this repo's
+own reference encoder on 200 real documents before writing anything; encoding
+silently wrong would poison everything downstream. And the counts land slightly
+above what you asked for (60,003,098 against 60,000,000) because the writer
+finishes the document it is in rather than truncating mid-sentence. Both are
+explained in depth in [the smoke
+runbook](/docs/runbooks/local-smoke#step-4-prepare-the-smoke-dataset).
+
+Disk cost: ~120 MB of shards (60M tokens at 2 bytes each), plus a transient
+HuggingFace cache.
+
+## Step 6: Train
+
+```bash
+uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json
+```
+
+No device flags are needed: the trainer picks CUDA if present, then Apple
+Silicon's MPS, then CPU, and adjusts precision to match. The first line it
+prints is the derived configuration:
+
+```
+params: 13,111,296 | device mps | world 1 | grad_accum 4 | steps 600
+```
+
+Check two things: `params: 13,111,296` (the `smoke` preset, exactly), and that
+`device` is what you expect (`mps` on Apple Silicon, `cpu` otherwise; CPU works
+and simply takes longer than the ~15 minutes MPS needs).
+
+Then the log starts. A train line every 10 steps, a validation line every 100
+(loss values here are from the recorded reference run; yours will differ
+slightly):
+
+```
+step      0 | loss 10.4399 | lr× 0.050 | ... tok/s
+step     10 | loss ...
+...
+step     99 | val loss 6.7274
+```
+
+### How to read the loss
+
+The loss is the model's average "surprise" at the true next token; lower is
+better. It gives you three checkpoints to watch for:
+
+1. **It must start at about 10.4.** A model that knows nothing assigns equal
+   probability to all 32,768 tokens, and the loss for that is `ln(32768) =
+   10.3972`. The recorded run started at 10.4399. Starting near this number is
+   proof the initialization is right; starting far from it (3, or 15, or `nan`)
+   means something is broken, and no amount of training will fix it.
+2. **It must fall quickly at first.** The recorded run was at 6.69 by step 100.
+3. **Validation should end near 5.5.** The recorded run finished 600 steps at
+   validation loss 5.5012, with the validation numbers tracking the train
+   numbers all the way down. That tracking is the point of the held-out split:
+   it says the model is learning English in general, not memorizing.
+
+The full recorded curve, step by step, is in the [smoke
+runbook](/docs/runbooks/local-smoke#the-measured-curve).
+
+While it runs, three artifacts accumulate in `out/smoke/`: `log.csv` (every
+number the run prints, for plotting later), `ckpt_last.pt` (a checkpoint,
+rewritten every 200 steps), and every 200 steps the loop prints a short sample
+generation to stdout so you can literally watch the model's English improve from
+noise to grammar.
+
+<Callout type="info">
+  Interrupted? Closed the laptop, hit Ctrl-C, whatever: nothing is lost beyond
+  the last checkpoint. Re-run the same command with `--resume` appended and it
+  continues from `out/smoke/ckpt_last.pt`, exactly, with no loss spike. Resume
+  is [verified on a real run](/docs/runbooks/local-smoke#step-6-verify-resume).
+</Callout>
+
+## Step 7: Sample from your model
+
+```bash
+uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt \
+    --tokenizer tokenizer/tokenizer.json --prompt "The" --max-new-tokens 60
+```
+
+This loads your checkpoint and generates 60 tokens continuing the prompt. From
+the recorded reference run, prompt `"The"`, seed 1:
+
+> The 'the last in the first years of the past was the most common in the world.
+> The best way to be the most diverse and highly difficult, while there was a
+> lot of the most important for future lives.
+
+**This is what success looks like at this scale.** The output is grammatical,
+fluent English with correct punctuation, learned from scratch in 15 minutes by a
+model 40,000× smaller than a frontier one. It is also factually meaningless, and
+that is expected: 13M parameters and ~10M training tokens buy the shape of
+language, not knowledge about the world. The [smoke runbook's
+reading](/docs/runbooks/local-smoke#how-to-read-this) of these samples explains
+why this split between fluency and grounding is exactly what the scale predicts.
+Knowledge is what the [489M cloud run](/docs/runbooks/cloud-pretrain) buys with
+10B tokens and ~$60.
+
+Try different prompts, `--seed` values, and `--temperature` (default 0.8; lower
+is more conservative, higher more chaotic).
+
+## When something goes wrong
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `uv: command not found` after installing | `~/.local/bin` not on `PATH` in this shell | Open a new terminal, or `export PATH="$HOME/.local/bin:$PATH"` |
+| Step 5 sits silent for a long time | Normal below 100M tokens; progress lines start at 100M | Wait for the `done:` line; check network activity if unsure |
+| `ValueError: data/smoke already contains a 'val' split` | Re-running step 5 into an existing directory; the writer refuses to overwrite | `rm -rf data/smoke` and re-run, or use a fresh `--data-dir` |
+| Network error mid-way through step 5 | Connection dropped; the script has no resume | `rm -rf data/smoke`, re-run it |
+| Training prints `device cpu` on an Apple Silicon Mac | PyTorch without MPS support (x86 Python under Rosetta, usually) | Re-install with `uv sync` on a native arm64 setup; CPU still works, just slower |
+| Loss at step 0 is not ≈10.4 | Broken install or corrupted data | Re-run `uv run pytest -q`; if green, rebuild `data/smoke` |
+| Training interrupted | Anything from Ctrl-C to a reboot | Re-run the training command with `--resume` |
+| `torch.compile disabled: not on CUDA` printed | Informational, not an error | Nothing; compilation is CUDA-only by design |
+
+## Where to go next
+
+- [Local smoke run](/docs/runbooks/local-smoke): the run you just did, with the
+  measured output of every step and what each number proves.
+- [Fully local training](/docs/runbooks/local-full-train): the model you just
+  trained got 0.75 tokens per parameter; the compute-optimal budget is 20. One
+  overnight run on the same laptop closes that gap, no cloud involved.
+- [Train on a custom dataset](/docs/runbooks/custom-dataset): swap FineWeb-Edu
+  for any HuggingFace text corpus; includes a TinyStories example sized for a
+  laptop.
+- [Cloud pretraining](/docs/runbooks/cloud-pretrain): the real thing. The same
+  commands, a 489M-parameter config, a rented H100, ~20 hours, ~$60.
+- [Architecture](/docs/architecture): what is actually inside the model you
+  just trained, one page per component.

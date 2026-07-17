@@ -7,7 +7,10 @@ This is the runbook that proves the repo works. Every command below was run on a
 **Apple M3 Pro (18 GB), PyTorch MPS backend**, against the committed code, and
 **every number on this page is a measurement from that run**, not an estimate,
 not a projection. Total time is about 15 minutes of training plus a tokenizer and
-a data step you can shorten or skip.
+a data step you can shorten or skip. It assumes you are comfortable with the
+tooling; if this is your first time training anything, follow
+[Your first training run](/docs/runbooks/first-run), which walks the same
+sequence with every step explained.
 
 The `smoke` preset is not a toy reimplementation. It is the same `tinyllm.train`
 entry point, the same [Muon+AdamW split](/docs/training/muon), the same
@@ -350,6 +353,8 @@ smoke run that produced it would mean the eval was lying.
 | Checkpoint/resume is sound | Resumed at 600 → 5.4914 at 619, no spike |
 | Generation works | Grammatical English from a 60-token prompt |
 
-Everything above is the same code path `d26` takes. The
-[cloud pretraining runbook](/docs/runbooks/cloud-pretrain) is the next step:
+Everything above is the same code path `d26` takes. Two directions from here:
+[fully local training](/docs/runbooks/local-full-train) takes this exact config
+to its full compute-optimal token budget overnight on the same laptop, and the
+[cloud pretraining runbook](/docs/runbooks/cloud-pretrain) is the real thing:
 the same commands with `--config d26`, on an H100, for 20 hours.
