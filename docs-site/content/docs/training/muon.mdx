@@ -1,0 +1,194 @@
+---
+title: Muon
+description: Momentum orthogonalized by Newton-Schulz — the derivation, the quintic iteration, and the hidden/embed/norm parameter split
+---
+
+Most of `tinyllm`'s parameters are not optimized by Adam. The hidden weight
+matrices — every attention and MLP projection — are trained with **Muon**
+(MomentUm Orthogonalized by Newton-schulz; Jordan et al., 2024), while only the
+embedding and the norm gains fall back to AdamW. This page derives Muon from the
+idea down to the code in `tinyllm/muon.py`, then explains exactly which
+parameters go where and why.
+
+## The core idea: orthogonalize the update
+
+Adam scales each weight's update by a per-coordinate estimate of the gradient's
+magnitude. It is coordinate-wise — it has no notion that a weight is a *matrix*.
+Muon takes the matrix structure seriously.
+
+For a 2-D weight `W` with (momentum-smoothed) gradient `G`, consider `G`'s
+singular value decomposition `G = U S V^T`. The singular values `S` say that the
+raw gradient is stretched hugely along a few dominant directions and barely at
+all along the rest. Stepping along `G` therefore moves the weight mostly in those
+few directions and starves the others — a badly conditioned update.
+
+Muon replaces `G` with its **orthogonalization**: set every singular value to
+one, i.e. step along `U V^T` instead of `U S V^T`. Two ways to see why that is a
+good direction:
+
+- `U V^T` is the closest semi-orthogonal matrix to `G` in Frobenius norm — the
+  "pure rotation" part of `G` with its lopsided scaling stripped out.
+- Equivalently, `U V^T` is the steepest-descent direction under the *spectral*
+  norm rather than the Euclidean one. It gives **every** singular direction a
+  unit-scale step, so the update is uniformly conditioned across the matrix
+  instead of dominated by its top few directions.
+
+Empirically, on the bulk hidden matrices of a transformer, this trains faster
+per token than AdamW. The catch is that an exact SVD every step, on every matrix,
+would be far too expensive. Muon approximates `U V^T` directly with a cheap
+matrix iteration.
+
+## Newton-Schulz: approximating `U Vᵀ` with a quintic
+
+The `zeropower_via_newtonschulz5` routine computes the orthogonalization without
+ever forming an SVD:
+
+```python
+def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
+    """Approximate UV^T for G = USV^T via quintic Newton-Schulz in bfloat16."""
+    assert G.ndim == 2
+    a, b, c = (3.4445, -4.7750, 2.0315)
+    X = G.bfloat16()
+    transposed = G.size(0) > G.size(1)
+    if transposed:
+        X = X.mT
+    X = X / (X.norm() + 1e-7)
+    for _ in range(steps):
+        A = X @ X.mT
+        B = b * A + c * A @ A
+        X = a * X + B @ X
+    if transposed:
+        X = X.mT
+    return X.to(G.dtype)
+```
+
+What each part does:
+
+- **Normalize first.** `X = X / (||X||_F + 1e-7)` scales the matrix so its
+  largest singular value is at most one, which is the basin the iteration is
+  tuned to converge from. The `1e-7` guards against a zero-gradient matrix.
+- **Iterate a quintic five times.** Each step computes `A = X Xᵀ` and then
+  `X ← a·X + (b·A + c·A²)·X`. Expanded, this applies an odd matrix polynomial
+  `p(X) = a·X + b·(X Xᵀ)X + c·(X Xᵀ)²X`. Because `X` and `X Xᵀ` share the same
+  singular vectors, the polynomial acts **only on the singular values**: it maps
+  each singular value `σ` through the scalar `p(σ) = aσ + bσ³ + cσ⁵`, and the
+  coefficients `(a, b, c) = (3.4445, −4.7750, 2.0315)` are chosen so that
+  iterating `p` drives every singular value in `(0, 1]` rapidly toward `1`. After
+  five iterations the singular values are all ≈ 1, so `X ≈ U V^T` — exactly the
+  orthogonalization we wanted, and the singular vectors `U, V` were never
+  disturbed.
+- **Transpose the tall case.** The iteration works on `X Xᵀ`, which is cheapest
+  when the matrix is wide. If `G` has more rows than columns it is transposed
+  going in and transposed back on the way out, so the heavy matmuls run on the
+  smaller Gram matrix.
+- **Run in bf16.** The whole iteration is done in bfloat16 for speed and cast
+  back to `G`'s dtype at the end; five steps of a well-conditioned polynomial do
+  not need fp32 precision.
+
+Five iterations is the fixed budget (`ns_steps = 5`) — enough for a good
+orthogonalization from the normalized start, cheap enough to run on every matrix
+every step.
+
+## The full Muon step
+
+Orthogonalization is the middle of a three-part update: momentum, orthogonalize,
+scaled step.
+
+```python
+@torch.no_grad()
+def step(self) -> None:
+    for group in self.param_groups:
+        for p in group["params"]:
+            if p.grad is None:
+                continue
+            g = p.grad
+            state = self.state[p]
+            if "momentum_buffer" not in state:
+                state["momentum_buffer"] = torch.zeros_like(g)
+            buf = state["momentum_buffer"]
+            buf.lerp_(g, 1 - group["momentum"])
+            g = g.lerp_(buf, group["momentum"]) if group["nesterov"] else buf
+            g = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
+            scale = max(1.0, p.size(0) / p.size(1)) ** 0.5
+            p.add_(g, alpha=-group["lr"] * scale)
+```
+
+- **Momentum (EMA of the gradient).** `buf.lerp_(g, 1 - momentum)` updates the
+  buffer to `momentum·buf + (1 - momentum)·g` — an exponential moving average of
+  the gradient with `momentum = 0.95`. Smoothing before orthogonalizing means the
+  iteration sees a stable direction rather than one noisy minibatch gradient.
+- **Nesterov look-ahead.** With `nesterov=True`, `g.lerp_(buf, momentum)` forms
+  `(1 - momentum)·g + momentum·buf`, blending the fresh gradient with the buffer
+  so the step anticipates where momentum is carrying the weights. (Without it,
+  the buffer itself is used.)
+- **Orthogonalize** the resulting direction with the quintic above.
+- **Shape-aware scale.** `scale = max(1, rows/cols) ** 0.5`. The orthogonalized
+  update has unit spectral scale regardless of the matrix's shape, but a matrix
+  with more rows than columns needs its step rescaled so the per-element update
+  magnitude stays comparable to squarer matrices. `sqrt(rows/cols)` (never below
+  1) is that correction. The final update is `p -= lr × scale × orthogonalized`.
+
+## The parameter split: who gets Muon
+
+Muon only makes sense on 2-D matrices — it needs a matrix to orthogonalize — and
+even among those, the embedding is special. `build_optimizers` sorts every
+trainable parameter into three buckets by shape and name:
+
+```python
+def build_optimizers(model: nn.Module, cfg: TrainConfig) -> list[torch.optim.Optimizer]:
+    """Muon for hidden 2-D matrices; AdamW for the (tied) embedding and norm gains."""
+    hidden, embed, norms = [], [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if p.ndim == 2 and "embed" not in name:
+            hidden.append(p)
+        elif p.ndim == 2:
+            embed.append(p)
+        else:
+            norms.append(p)
+    muon = Muon(hidden, lr=cfg.muon_lr, momentum=cfg.muon_momentum)
+    adamw = torch.optim.AdamW(
+        [
+            {"params": embed, "weight_decay": cfg.adamw_wd},
+            {"params": norms, "weight_decay": 0.0},
+        ],
+        lr=cfg.adamw_lr,
+        betas=cfg.adamw_betas,
+    )
+    for opt in (muon, adamw):
+        for group in opt.param_groups:
+            group["initial_lr"] = group["lr"]
+    return [muon, adamw]
+```
+
+The three buckets:
+
+- **`hidden` — Muon.** Every 2-D weight whose name is not the embedding: the
+  **seven matrices per transformer block** — attention `wq`, `wk`, `wv`, `wo`
+  and MLP `w_gate`, `w_up`, `w_down`. These are the linear transformations that
+  do the model's actual work, and they are exactly where matrix-aware
+  orthogonalized updates pay off. Muon runs them at `lr = 0.02`, `momentum =
+  0.95`, Nesterov on, five Newton-Schulz steps.
+
+- **`embed` — AdamW with weight decay.** The token embedding is 2-D too, but it
+  is a lookup table rather than a transformation, and because the model ties the
+  `lm_head` to it, the same tensor also serves as the output projection.
+  Orthogonalizing a one-hot-indexed lookup table does not carry the same
+  justification, and the embedding benefits from regularization, so it gets AdamW
+  at `lr = 6e-4`, `betas = (0.9, 0.95)`, and `weight_decay = 0.1`. (Weight tying
+  means this tensor is counted once — `named_parameters` deduplicates the shared
+  storage, and it appears under the `embed` name, which is why the name check
+  routes it here.)
+
+- **`norms` — AdamW, no weight decay.** Everything 1-D: all the `RMSNorm` gains —
+  `attn_norm`, `mlp_norm`, the per-head `q_norm`/`k_norm`, and the `final_norm`.
+  There is nothing to orthogonalize in a per-channel scale vector, and decaying a
+  normalization gain toward zero would fight the normalization itself, so these
+  get AdamW with `weight_decay = 0.0`.
+
+The split is why `build_optimizers` returns **two** optimizers that the training
+loop steps together. Finally, each parameter group's `lr` is snapshotted into
+`initial_lr`, which is what the [WSD schedule](/docs/training/index) scales every
+step — so Muon's `0.02` and AdamW's `6e-4` both ride the same warmup, plateau,
+and decay curve off their own bases.

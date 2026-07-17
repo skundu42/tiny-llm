@@ -1,0 +1,151 @@
+---
+title: Checkpointing and resume
+description: Atomic writes, what a checkpoint contains, and the bit-exact resume guarantee with the test that proves it
+---
+
+A pretraining run is long and machines fail. The value of a checkpoint is only as
+good as two guarantees: that writing it can never corrupt the previous one, and
+that loading it resumes the run **exactly** — not "close enough," but producing
+the same weights the uninterrupted run would have. `tinyllm` delivers both, and
+the second is backed by a test that checks bit-for-bit equality.
+
+## Atomic writes
+
+A checkpoint is written to a temporary file and then swapped into place with a
+single atomic rename:
+
+```python
+def _save_ckpt(path: str, raw_model, optimizers, step, model_cfg, train_cfg) -> None:
+    tmp = path + ".tmp"
+    torch.save(
+        {
+            "model": raw_model.state_dict(),
+            "optimizers": [o.state_dict() for o in optimizers],
+            "step": step,
+            "model_cfg": asdict(model_cfg),
+            "train_cfg": asdict(train_cfg),
+        },
+        tmp,
+    )
+    os.replace(tmp, path)
+```
+
+`os.replace` is atomic within a filesystem: at no observable instant does
+`ckpt_last.pt` contain half a file. A reader — or the next resume — sees either
+the complete old checkpoint or the complete new one, never a truncated blob, even
+if the process is killed mid-`torch.save`. The bytes go to `tmp` first; only the
+rename, which is indivisible, publishes them. (The same tmp-then-`os.replace`
+pattern guards the data pipeline's `index.json` — see [Data](/docs/data).)
+
+Checkpoints are written by the master rank only, on a cadence and at the end:
+
+```python
+if master and ((step + 1) % tc.ckpt_every == 0 or step == tc.total_steps - 1):
+    _save_ckpt(ckpt_path, raw_model, optimizers, step + 1, mc, tc)
+```
+
+The path is a single rolling file, `out_dir/ckpt_last.pt`, overwritten each time —
+so "the last checkpoint" is always exactly one file. Because DDP keeps every rank
+in lockstep, the master's replica is a faithful snapshot of the whole run.
+
+## What a checkpoint contains
+
+Everything needed to reconstruct the run, and nothing that would tie it to one
+machine:
+
+- **`model`** — `raw_model.state_dict()`. Note `raw_model`, the *unwrapped*
+  model: not the `DDP` wrapper and not the `torch.compile` wrapper, so the keys
+  are clean parameter names with no `module.` or `_orig_mod.` prefixes. The
+  checkpoint loads back into a plain model regardless of how the original run was
+  parallelized or compiled.
+- **`optimizers`** — a list of both optimizer `state_dict`s. This is the piece
+  people forget, and its absence is why naive resumes drift: it carries Muon's
+  per-matrix **momentum buffers** and AdamW's first/second **moment estimates**,
+  plus each param group's `lr` and `initial_lr`. Restore these and the optimizers
+  pick up mid-trajectory instead of cold-starting.
+- **`step`** — saved as `step + 1`, i.e. the *next* step to run. On resume this
+  becomes `start_step`, so the loop continues from precisely where it stopped.
+- **`model_cfg` and `train_cfg`** — both dataclasses flattened with `asdict`.
+  Storing them makes the checkpoint **self-describing**: the architecture and the
+  full training configuration travel with the weights, so a checkpoint can be
+  reloaded without any external metadata about how it was built.
+
+Resume reads them straight back:
+
+```python
+if resume:
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    raw_model.load_state_dict(ckpt["model"])
+    for opt, sd in zip(optimizers, ckpt["optimizers"]):
+        opt.load_state_dict(sd)
+    start_step = ckpt["step"]
+```
+
+## The bit-exact resume guarantee
+
+Here is where the design pieces compose. An interrupted-and-resumed run produces
+**identical** weights to an uninterrupted one, and it does so because three
+things are true at once:
+
+1. **The data stream is a pure function of `(seed, rank, step, micro)`.** The
+   sampler holds no state; every micro-batch is regenerated from its coordinates
+   (see [Data](/docs/data)). So resuming at `start_step` replays the *exact* same
+   tokens the uninterrupted run would have seen from that step forward. This is
+   the hard part of resume — data ordering — and the stateless RNG dissolves it.
+2. **Model and optimizer state are restored exactly**, including the momentum and
+   moment buffers, from the atomically-written checkpoint.
+3. **The forward/backward is deterministic** given identical weights and inputs.
+   There is no dropout anywhere in the model, so the same batch through the same
+   weights yields the same gradients.
+
+Together these mean nothing distinguishes "stopped at step N and resumed" from
+"ran straight through step N" — same tokens, same states, same updates.
+
+## The proof: `test_resume_is_bit_exact`
+
+The guarantee is not left to argument. `tests/test_train.py` contains a test that
+runs the model straight through, then reconstructs the same endpoint via a
+resume, and asserts every weight matches to the bit:
+
+```python
+def test_resume_is_bit_exact(tmp_path):
+    _write_cyclic_data(tmp_path)
+    mcfg, tcfg = _micro_cfgs(tmp_path, steps=10)
+
+    run(mcfg, tcfg, device="cpu")
+    full = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+
+    import shutil
+    shutil.rmtree(tmp_path / "out")
+    mcfg2, tcfg2 = _micro_cfgs(tmp_path, steps=5)
+    run(mcfg2, tcfg2, device="cpu")
+    mcfg3, tcfg3 = _micro_cfgs(tmp_path, steps=10)
+    run(mcfg3, tcfg3, device="cpu", resume=True)
+    resumed = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+
+    assert full["step"] == resumed["step"] == 10
+    for k in full["model"]:
+        assert torch.equal(full["model"][k], resumed["model"][k]), f"mismatch in {k}"
+```
+
+The structure is a clean A/B comparison:
+
+- **A — straight through.** Train 10 steps in one shot and keep the checkpoint
+  (`full`).
+- **B — interrupted then resumed.** Delete the output, train a *fresh* run for 5
+  steps (which checkpoints at step 5), then start again with `resume=True` and run
+  to step 10. That second launch loads the step-5 checkpoint and continues.
+- **Assert bit-exactness.** Both runs must report `step == 10`, and for *every*
+  parameter tensor `torch.equal(full[k], resumed[k])` must hold —
+  `torch.equal` is exact, element-for-element equality, not an approximate
+  tolerance. If resume drifted by even one ULP in one weight, the test fails and
+  names the offending tensor.
+
+This is why resume is trustworthy rather than merely plausible: the property is
+pinned by a test in CI. A note on scope — the test runs on CPU in fp32
+(`device="cpu"`, `dtype="fp32"`), the fully deterministic setting. On GPU with
+bf16, non-deterministic kernels can introduce tiny differences a resume cannot
+control. What the design *does* guarantee everywhere is that resume removes the
+usual culprit — data ordering — by regenerating the identical token stream and
+restoring complete model and optimizer state; the CPU/fp32 test proves that when
+the kernels are deterministic, the result is bit-for-bit identical.

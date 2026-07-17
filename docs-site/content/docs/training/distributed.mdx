@@ -1,0 +1,140 @@
+---
+title: Distributed training
+description: DDP mechanics, no_sync during accumulation, torchrun from one GPU to many, and why not FSDP at half a billion parameters
+---
+
+`tinyllm` scales across GPUs with plain **Distributed Data Parallel (DDP)**.
+There is no model sharding, no pipeline splitting — every GPU holds a full copy
+of the model and they cooperate only by averaging gradients. At ~0.5B parameters
+that is exactly the right amount of machinery: simple, fast, and enough. This
+page covers how DDP works here, the `no_sync` trick that keeps accumulation
+cheap, how the same code runs on one GPU or eight, and why FSDP would be the
+wrong tool.
+
+## DDP mechanics
+
+Distributed mode is detected from the environment — `torchrun` sets `RANK`, so
+its presence flips the switch:
+
+```python
+ddp = "RANK" in os.environ
+if ddp:
+    dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo")
+    rank, world = dist.get_rank(), dist.get_world_size()
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        torch.cuda.set_device(device)
+else:
+    rank, world = 0, 1
+    device = device or _pick_device()
+master = rank == 0
+```
+
+Each rank is its own process with its own GPU (`local_rank` selects the device),
+talking over **NCCL** on CUDA (or **gloo** on CPU). The model is then wrapped:
+
+```python
+if ddp:
+    model = DDP(model, device_ids=[local_rank] if device.startswith("cuda") else None)
+```
+
+The data-parallel contract is: **replicate the model, split the data**. Every
+rank runs the identical model on a *different* slice of the global batch —
+different because the sampler seeds on `rank` (`np.random.default_rng([tc.seed,
+rank, step, micro])`), so the ranks draw disjoint crops with no coordination (see
+[Data](/docs/data)). During `backward`, DDP hooks fire an **all-reduce** that
+averages each gradient across all ranks, so after backward every replica holds
+the same mean gradient, applies the same optimizer step, and the replicas stay
+bit-identical without ever exchanging weights — only gradients cross the wire.
+
+One rank (`master = rank == 0`) owns the side effects: it prints, writes
+`log.csv`, drives Weights & Biases, and saves checkpoints. The others just
+compute. Since DDP keeps every replica in lockstep, rank 0's copy is a faithful
+snapshot of the whole run.
+
+## `no_sync` during accumulation
+
+Naively, DDP all-reduces gradients on **every** `backward`. But with gradient
+accumulation there are `grad_accum` backward passes per optimizer step, and
+all-reducing on each one would waste bandwidth averaging partial gradients that
+are only going to be summed locally anyway. The fix is to sync **only on the last
+micro-step**:
+
+```python
+sync = (not ddp) or micro == grad_accum - 1
+sync_ctx = nullcontext() if sync else model.no_sync()
+with sync_ctx, ctx:
+    _, loss = model(x, targets=y)
+(loss / grad_accum).backward()
+```
+
+`model.no_sync()` disables DDP's gradient synchronization for the passes it
+wraps. So the first `grad_accum − 1` micro-steps accumulate their gradients
+**locally** with no communication, and only the final micro-step — run under a
+plain `nullcontext`, so syncing is on — triggers the all-reduce, which averages
+the fully-accumulated gradient across ranks in one shot.
+
+This cuts inter-GPU communication by a factor of `grad_accum` per optimizer step,
+and the arithmetic still comes out right: each rank locally summed `grad_accum`
+micro-gradients that were each pre-scaled by `1/grad_accum`, and the final
+all-reduce averages those per-rank sums across the `world` ranks. The result is
+the correct global mean gradient over all `batch_tokens`. When not running
+distributed, `sync` is always `True` and the whole mechanism is a no-op.
+
+## From one GPU to many with torchrun
+
+The same file runs unchanged across scales — only how you launch it differs, and
+the launcher only sets environment variables.
+
+**Single GPU (or CPU, or Apple MPS):** run the module directly. No `RANK` in the
+environment, so `ddp` is `False`, `world = 1`, and `_pick_device` picks CUDA, MPS,
+or CPU. For `d26` this means `grad_accum = 16` — the whole 524,288-token batch is
+accumulated on one device.
+
+```bash
+python -m tinyllm.train --config d26 --data-dir data/fineweb-edu
+```
+
+**Multiple GPUs on one node:** launch under `torchrun`, which spawns one process
+per GPU and populates `RANK`, `WORLD_SIZE`, and `LOCAL_RANK`:
+
+```bash
+torchrun --standalone --nproc_per_node=8 -m tinyllm.train --config d26
+```
+
+Now `world = 8` and `grad_accum` drops to `2`, but `batch_tokens` is still
+524,288 — the [grad-accumulation identity](/docs/training/index) holds the
+effective batch constant while the eight ranks share the work. Multi-node runs
+are the same picture with `torchrun`'s rendezvous arguments across hosts. Because
+the effective batch, the schedule, and the per-`(rank, step)` data are all
+pinned, scaling out changes throughput and `grad_accum` but not the loss curve
+(modulo bf16 kernel non-determinism).
+
+## Why not FSDP at half a billion parameters
+
+Fully Sharded Data Parallel (FSDP) shards parameters, gradients, and optimizer
+state across ranks so that a model too big for a single GPU can still be trained
+— each rank holds only a slice and gathers the rest just in time. That is
+indispensable at many billions of parameters. At ~0.5B it is the wrong trade:
+
+- **The model already fits, comfortably.** Half a billion parameters in fp32 is
+  ~2 GB of weights. Add Muon's momentum buffers over the hidden matrices, AdamW's
+  two moments over the embedding and norms, plus activations, and the full
+  training footprint is still a handful of GB — well within a single modern
+  accelerator. Sharding to save memory you are not short of buys nothing.
+
+- **Sharding adds cost and complexity for no benefit.** FSDP introduces
+  gather/scatter communication for parameters and extra bookkeeping. Plain DDP's
+  one gradient all-reduce per step (further reduced by `no_sync`) is both simpler
+  and faster when a replica fits.
+
+- **Muon prefers whole matrices, locally.** The Newton-Schulz orthogonalization
+  in [Muon](/docs/training/muon) operates on each full 2-D weight matrix. Keeping
+  a complete, unsharded replica on every rank means each optimizer works on the
+  whole matrix with no reconstruction step — a natural fit for DDP.
+
+The rule of thumb: reach for FSDP when a single replica (weights plus optimizer
+state) no longer fits on one GPU. Until then, replicate-and-all-reduce is the
+faster, simpler choice — and at this scale `tinyllm` stays firmly on the DDP side
+of that line.

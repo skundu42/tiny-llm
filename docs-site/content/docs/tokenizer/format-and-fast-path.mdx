@@ -1,0 +1,189 @@
+---
+title: Format and the fast path
+description: The JSON on-disk format, the byte-to-unicode table, and the byte-identical Hugging Face export
+---
+
+A trained tokenizer has to be saved, reloaded, and — because encoding a
+billion-token corpus in pure Python is slow — optionally handed to a fast Rust
+engine for bulk work. This page covers the on-disk format, the byte-to-unicode
+table that makes the fast-engine handoff possible, and the parity contract that
+keeps the pure-Python encoder as the single source of truth.
+
+## The on-disk JSON format
+
+`save` writes a small, human-readable JSON file:
+
+```python
+def save(self, path: str) -> None:
+    data = {
+        "version": 1,
+        "pattern": SPLIT_PATTERN,
+        "merges": self.merges,
+        "special_tokens": self.special_tokens,
+    }
+    with open(path, "w") as f:
+        json.dump(data, f)
+```
+
+Four fields, and only two of them carry real information:
+
+- **`version`** — a schema version, so the loader can evolve.
+- **`pattern`** — the exact pre-tokenization regex. Storing it makes the file
+  self-contained: the split used at encode time is guaranteed to be the one the
+  merges were trained against, not whatever the current source code happens to
+  say.
+- **`merges`** — the ordered list of merges, each a `[a, b]` pair of **integer
+  ids**. This is the entire learned model. Note what is *not* stored: the
+  expanded byte strings of each token. Because token `256 + i` is by definition
+  the concatenation of the tokens named in merge `i`, the whole vocab is
+  reconstructed deterministically from the merge list alone. Storing integer id
+  pairs instead of strings keeps the file compact and completely free of any
+  text-encoding ambiguity.
+- **`special_tokens`** — the mapping `{"<|endoftext|>": id}`.
+
+Loading is the mirror image, and rebuilding the vocab from merges happens in
+`_build`:
+
+```python
+@classmethod
+def load(cls, path: str) -> "BPETokenizer":
+    with open(path) as f:
+        data = json.load(f)
+    return cls([tuple(m) for m in data["merges"]], data["special_tokens"])
+```
+
+The constructor calls `_build`, which reconstructs `merge_ranks`, the full
+`vocab` (bytes `0`–`255` plus one entry per merge), and the reverse
+special-token map. Nothing else needs to be persisted.
+
+## Decoding is always lossless
+
+Because every id ultimately expands to a concrete byte string, decoding is just
+concatenation:
+
+```python
+def decode(self, ids: Sequence[int]) -> str:
+    parts: list[bytes] = []
+    for i in ids:
+        if i in self._special_of_id:
+            parts.append(self._special_of_id[i].encode("utf-8"))
+        else:
+            parts.append(self.vocab[i])
+    return b"".join(parts).decode("utf-8", errors="replace")
+```
+
+Special ids decode back to their literal text (e.g. `<|endoftext|>`), ordinary
+ids to their byte strings. The bytes are joined and *then* decoded as UTF-8, so
+a multi-byte character split across two tokens still reassembles correctly. The
+`errors="replace"` is a safety net for id sequences that were never produced by
+`encode` (e.g. a truncated generation ending mid-character).
+
+## The byte-to-unicode table
+
+The JSON format above never needs it — but the moment you want to talk to
+Hugging Face `tokenizers`, you do. That library represents BPE tokens as
+**strings**, and a token's bytes can include control characters, raw spaces, and
+newlines that are unsafe or invisible in a string-keyed JSON vocab. GPT-2's
+reversible byte-to-unicode map solves this by relabeling all 256 byte values as
+256 distinct *printable* Unicode characters:
+
+```python
+@lru_cache(maxsize=1)
+def _bytes_to_unicode() -> dict[int, str]:
+    """GPT-2's reversible byte -> printable-unicode-char table."""
+    bs = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("¡"), ord("¬") + 1))
+        + list(range(ord("®"), ord("ÿ") + 1))
+    )
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    return dict(zip(bs, (chr(c) for c in cs)))
+```
+
+The bytes that are *already* printable — `!` through `~`, `¡` through `¬`, `®`
+through `ÿ` — map to themselves. The remaining bytes (control codes, space,
+delete, and a couple of gaps) have no safe printable form, so they are shifted
+up to fresh codepoints starting at `256`. The result is a bijection: 256 bytes
+to 256 unique printable characters, fully reversible. A space (byte `32`), for
+instance, is displayed as `Ġ` — the leading-`Ġ` tokens you see in GPT-2-family
+vocabularies are just spaces under this relabeling.
+
+## The fast path: exporting to Hugging Face
+
+Encoding a full pretraining corpus with the Python encoder would be the
+bottleneck of data prep. So `export_fast` builds an equivalent Rust-backed
+`tokenizers.Tokenizer` that produces the same ids far faster:
+
+```python
+def export_fast(self):
+    from tokenizers import Regex, Tokenizer, decoders, models, pre_tokenizers
+
+    b2u = _bytes_to_unicode()
+    to_str = lambda bs: "".join(b2u[b] for b in bs)  # noqa: E731
+    vocab = {to_str(tok_bytes): i for i, tok_bytes in self.vocab.items()}
+    merges = [(to_str(self.vocab[a]), to_str(self.vocab[b])) for a, b in self.merges]
+    fast = Tokenizer(models.BPE(vocab=vocab, merges=merges))
+    fast.pre_tokenizer = pre_tokenizers.Sequence(
+        [
+            pre_tokenizers.Split(Regex(SPLIT_PATTERN), behavior="isolated"),
+            pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False),
+        ]
+    )
+    fast.decoder = decoders.ByteLevel()
+    return fast
+```
+
+Every piece is chosen to reproduce the Python behavior exactly:
+
+- **`vocab` and `merges` are translated through `to_str`**, i.e. through the
+  byte-to-unicode table, because the HF `BPE` model is keyed on those printable
+  strings rather than on raw bytes or integer pairs.
+- **The pre-tokenizer is a `Sequence` of two stages.** First `Split` with the
+  *same* `SPLIT_PATTERN` and `behavior="isolated"`, so the text is chopped into
+  the identical pre-tokens. This is exactly why the pattern had to drop
+  possessive quantifiers — the Rust regex engine would reject them, and it must
+  swallow the pattern verbatim. Second, `ByteLevel(add_prefix_space=False,
+  use_regex=False)` maps the pre-token bytes into the byte-to-unicode alphabet
+  the vocab is keyed on. `use_regex=False` is critical: the `ByteLevel` stage
+  must *not* run its own built-in splitting, because the `Split` stage already
+  did all the splitting.
+- **The decoder is `ByteLevel`**, the inverse of that mapping, so `fast` can
+  round-trip on its own.
+
+## The parity contract: Python is ground truth
+
+The fast tokenizer is an optimization, never an authority. The source is
+explicit that the pure-Python encoder is the reference implementation and the
+fast one must be proven equivalent before use:
+
+```python
+def verify_fast(self, fast, texts: Iterable[str]) -> None:
+    """Assert `fast` produces byte-identical ids to our encoder."""
+    for t in texts:
+        if fast.encode(t).ids != self.encode(t):
+            raise ValueError(f"fast tokenizer mismatch on: {t[:80]!r}")
+```
+
+`verify_fast` demands **byte-identical** id sequences — not "close," not "same
+length," exactly equal — on a sample of real text, and raises the instant any
+document disagrees. The data-prep pipeline wires this contract in before it
+trusts the fast path: it exports, verifies on a sample, prints a confirmation,
+and only then batch-encodes the corpus with the fast engine:
+
+```python
+fast = tok.export_fast()
+sample = list(itertools.islice(docs, 200))
+tok.verify_fast(fast, sample)
+print("fast tokenizer verified token-identical on 200 docs")
+```
+
+If the two engines ever diverged — a regex-dialect quirk, a byte-mapping bug —
+`verify_fast` would fail loudly at prep time rather than silently poisoning tens
+of billions of training tokens. The speed of Rust, with the correctness of the
+implementation you can read end to end.
