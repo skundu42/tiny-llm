@@ -42,7 +42,7 @@ def main() -> None:
     model, cfg = load_model(args.ckpt, device)
     tok = BPETokenizer.load(args.tokenizer)
 
-    ds = load_dataset("hellaswag", split="validation", streaming=True)
+    ds = load_dataset("Rowan/hellaswag", split="validation", streaming=True)
     n = acc = acc_norm = 0
     for ex in ds:
         if n >= args.limit:
