@@ -78,3 +78,25 @@ def test_min_word_freq_filters_rare_words():
     t = BPETokenizer.train(texts, vocab_size=300, min_word_freq=2)
     # 'rare' appeared once -> excluded from training, but still encodable at byte level
     assert t.decode(t.encode("rare")) == "rare"
+
+
+def test_fast_export_parity(tok):
+    fast = tok.export_fast()
+    samples = ROUNDTRIP_STRINGS + CORPUS
+    for s in samples:
+        assert fast.encode(s).ids == tok.encode(s), f"mismatch on {s!r}"
+
+
+def test_verify_fast_passes(tok):
+    tok.verify_fast(tok.export_fast(), CORPUS)
+
+
+def test_verify_fast_raises_on_mismatch(tok):
+    class Bogus:
+        def encode(self, s):
+            class R:
+                ids = [0]
+            return R()
+    import pytest
+    with pytest.raises(ValueError):
+        tok.verify_fast(Bogus(), ["hello"])

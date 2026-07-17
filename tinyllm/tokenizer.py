@@ -37,6 +37,24 @@ def _count_words(text: str) -> Counter[bytes]:
     return Counter(m.group().encode("utf-8") for m in _PATTERN.finditer(text))
 
 
+@lru_cache(maxsize=1)
+def _bytes_to_unicode() -> dict[int, str]:
+    """GPT-2's reversible byte -> printable-unicode-char table."""
+    bs = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("¡"), ord("¬") + 1))
+        + list(range(ord("®"), ord("ÿ") + 1))
+    )
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    return dict(zip(bs, (chr(c) for c in cs)))
+
+
 class BPETokenizer:
     def __init__(
         self,
@@ -191,3 +209,33 @@ class BPETokenizer:
         with open(path) as f:
             data = json.load(f)
         return cls([tuple(m) for m in data["merges"]], data["special_tokens"])
+
+    # ------------------------------------------------------------ fast export
+
+    def export_fast(self):
+        """Build a HF `tokenizers.Tokenizer` with identical merges.
+
+        Used only to accelerate bulk corpus encoding; call verify_fast on a
+        sample before trusting it. Our pure-Python encoder is ground truth.
+        """
+        from tokenizers import Regex, Tokenizer, decoders, models, pre_tokenizers
+
+        b2u = _bytes_to_unicode()
+        to_str = lambda bs: "".join(b2u[b] for b in bs)  # noqa: E731
+        vocab = {to_str(tok_bytes): i for i, tok_bytes in self.vocab.items()}
+        merges = [(to_str(self.vocab[a]), to_str(self.vocab[b])) for a, b in self.merges]
+        fast = Tokenizer(models.BPE(vocab=vocab, merges=merges))
+        fast.pre_tokenizer = pre_tokenizers.Sequence(
+            [
+                pre_tokenizers.Split(Regex(SPLIT_PATTERN), behavior="isolated"),
+                pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False),
+            ]
+        )
+        fast.decoder = decoders.ByteLevel()
+        return fast
+
+    def verify_fast(self, fast, texts: Iterable[str]) -> None:
+        """Assert `fast` produces byte-identical ids to our encoder."""
+        for t in texts:
+            if fast.encode(t).ids != self.encode(t):
+                raise ValueError(f"fast tokenizer mismatch on: {t[:80]!r}")
