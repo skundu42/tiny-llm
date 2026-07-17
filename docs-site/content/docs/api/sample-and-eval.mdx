@@ -187,12 +187,14 @@ uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
 Streams HellaSwag's **validation** split (the test labels are not public), encodes
 each ending with a **leading space** (`tok.encode(" " + e)`), skips examples that
 would exceed `cfg.seq_len` without counting them, and reports both metrics every
-100 examples:
+100 examples. **No `d26` run has been executed, so the numbers below are
+illustrative of the output format only** — they are not measurements:
 
 ```
-100: acc 0.2700 | acc_norm 0.3100
+# illustrative format — no d26 run exists yet; these are not measured values
+100: acc 0.2900 | acc_norm 0.3300
 ...
-final (1000 examples): acc 0.2960 | acc_norm 0.3210
+final (1000 examples): acc 0.2880 | acc_norm 0.3240
 ```
 
 **Requires `datasets`** — imported lazily inside `main`, along with `load_model`,

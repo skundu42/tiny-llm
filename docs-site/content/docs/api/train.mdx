@@ -197,18 +197,32 @@ uv run python -m tinyllm.train --config smoke --device cpu --steps 20
 
 ### `log.csv`
 
-Written to `{out_dir}/log.csv` by the master rank, flushed on every write:
+Written to `{out_dir}/log.csv` by the master rank, flushed on every write. The
+real first rows of the [recorded smoke run](/docs/runbooks/local-smoke)'s
+`out/smoke/log.csv`:
 
 ```
 step,split,loss,lr_scale,tok_per_sec
-0,train,10.439900,0.0500,12904
+0,train,10.439875,0.0500,61272
+10,train,9.776255,0.5500,13118
+20,train,8.829264,1.0000,13077
 ...
-99,val,6.727400,,
+99,val,6.727361,,
 ```
 
-`val` rows leave `lr_scale` and `tok_per_sec` empty. `tok_per_sec` is
-`batch_tokens × log_every / elapsed` — tokens since the last log line over
-wall-clock.
+`val` rows leave `lr_scale` and `tok_per_sec` empty. Losses are written at `.6f`
+here while stdout prints `.4f`, so the CSV is the more precise record of the same
+number.
+
+<Callout type="warn">
+  **Ignore the first row's `tok_per_sec`.** `tok_s = tc.batch_tokens *
+  tc.log_every / max(now - t_last, 1e-9)` always credits **`log_every` steps'
+  worth of tokens** to the elapsed time, but at step 0 only *one* step has run
+  since `t_last` was set — so the figure is inflated roughly `log_every`× and
+  `61272` above is an artifact, not throughput. The steady-state rate is the
+  ~13,100 tok/s from step 10 onward. The same distortion applies to the first log
+  line after any resume.
+</Callout>
 
 ### `ckpt_last.pt`
 

@@ -280,10 +280,12 @@ uv run python -m tinyllm.eval_hellaswag \
 ```
 
 `--device` is optional and auto-selects `cuda` → `mps` → `cpu`. Output is a
-progress line every 100 examples and a final summary:
+progress line every 100 examples and a final summary. **No `d26` run has been
+executed — the line below illustrates the format, not a measurement:**
 
 ```
-final (1000 examples): acc 0.2960 | acc_norm 0.3210
+# illustrative format — no d26 run exists yet; these are not measured values
+final (1000 examples): acc 0.2880 | acc_norm 0.3240
 ```
 
 ### What to expect at this scale

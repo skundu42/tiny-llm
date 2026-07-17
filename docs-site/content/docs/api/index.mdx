@@ -120,6 +120,10 @@ A few rules hold everywhere, and knowing them removes most surprises:
 - **Randomness is seeded by value, never by stream.** Data sampling derives a
   fresh `np.random.default_rng([...])` from `(seed, rank, step, micro)`, which is
   what makes [resume](/docs/training/checkpointing) bit-exact.
+- **A `...` body means the body is elided.** Signature-only blocks on these pages
+  show the real signature verbatim from source with the implementation omitted, in
+  the style of a `.pyi` stub — the `...` is never in the source. Blocks that *do*
+  show a body are lifted verbatim (dedented to column 0 so they stand alone).
 - **Leading underscore means private** and unlisted here — `_save_ckpt`,
   `_pick_device`, `_autocast_ctx`, `_count_words`, `_bytes_to_unicode`,
   `_build`, `_flush`, `_init_weights`, `_encode_word`.
