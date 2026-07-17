@@ -1,6 +1,6 @@
 ---
 title: API reference
-description: The module map — every public class and function in tinyllm, with exact signatures, and where each one is explained
+description: The module map; every public class and function in tinyllm, with exact signatures, and where each one is explained
 ---
 
 `tinyllm` is **nine source files totalling 1,148 lines**, with no framework and no
@@ -14,7 +14,7 @@ pages are the lookup.
 |---|---|---|---|
 | [`config.py`](/docs/api/config) | 78 | Model and training hyperparameters, presets | `ModelConfig`, `TrainConfig`, `MODEL_PRESETS`, `TRAIN_PRESETS` |
 | [`model.py`](/docs/api/model) | 217 | The transformer, RoPE, KV cache, generation | `RMSNorm`, `precompute_rope`, `apply_rope`, `KVCache`, `Attention`, `SwiGLU`, `Block`, `TinyLLM` |
-| [`tokenizer.py`](/docs/api/tokenizer) | 248 | Byte-level BPE — training, encode/decode, fast export | `BPETokenizer`, `SPLIT_PATTERN`, `ENDOFTEXT` |
+| [`tokenizer.py`](/docs/api/tokenizer) | 248 | Byte-level BPE: training, encode/decode, fast export | `BPETokenizer`, `SPLIT_PATTERN`, `ENDOFTEXT` |
 | [`data.py`](/docs/api/data) | 100 | uint16 token shards and memmapped sampling | `ShardWriter`, `TokenShards`, `INDEX_NAME` |
 | [`muon.py`](/docs/api/muon) | 91 | The Muon optimizer and the parameter split | `zeropower_via_newtonschulz5`, `Muon`, `build_optimizers` |
 | [`train.py`](/docs/api/train) | 289 | The pretraining loop, WSD schedule, DDP, checkpoints, MFU | `lr_scale`, `run`, `main`, `PEAK_FLOPS` |
@@ -51,7 +51,7 @@ TokenShards`).
 Every executable surface, in the order you would use it:
 
 ```bash
-# 1. train a tokenizer (skippable — tokenizer/tokenizer.json is committed)
+# 1. train a tokenizer (skippable; tokenizer/tokenizer.json is committed)
 uv run python scripts/train_tokenizer.py --max-bytes 250000000
 
 # 2. encode a corpus into uint16 shards
@@ -60,7 +60,7 @@ uv run python scripts/prepare_data.py --data-dir data/fineweb-edu
 # 3. pretrain
 uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
 
-# 3b. pretrain on 8 GPUs — same run, same math
+# 3b. pretrain on 8 GPUs: same run, same math
 uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
     --config d26 --tokenizer tokenizer/tokenizer.json
 
@@ -112,7 +112,7 @@ A few rules hold everywhere, and knowing them removes most surprises:
 
 - **No biases anywhere.** Every `nn.Linear` is `bias=False`.
 - **Configs are dataclasses, and mutable.** `MODEL_PRESETS` / `TRAIN_PRESETS` hold
-  **shared instances**, not factories — `main()` mutates them in place from CLI
+  **shared instances**, not factories; `main()` mutates them in place from CLI
   flags. Mutating a preset in a long-lived process affects everyone who reads it
   afterward; `dataclasses.replace(...)` if you want a copy.
 - **Shapes are `(B, T, C)`** through the model, `(B, H, T, head_dim)` inside
@@ -122,9 +122,9 @@ A few rules hold everywhere, and knowing them removes most surprises:
   what makes [resume](/docs/training/checkpointing) bit-exact.
 - **A `...` body means the body is elided.** Signature-only blocks on these pages
   show the real signature verbatim from source with the implementation omitted, in
-  the style of a `.pyi` stub — the `...` is never in the source. Blocks that *do*
+  the style of a `.pyi` stub; the `...` is never in the source. Blocks that *do*
   show a body are lifted verbatim (dedented to column 0 so they stand alone).
-- **Leading underscore means private** and unlisted here — `_save_ckpt`,
+- **Leading underscore means private** and unlisted here: `_save_ckpt`,
   `_pick_device`, `_autocast_ctx`, `_count_words`, `_bytes_to_unicode`,
   `_build`, `_flush`, `_init_weights`, `_encode_word`.
 - **`from __future__ import annotations`** in every module except `__init__.py`

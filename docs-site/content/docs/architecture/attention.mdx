@@ -1,6 +1,6 @@
 ---
 title: Attention
-description: Grouped-query attention with QK-norm — why 4 KV heads, what instability QK-norm prevents, the KV cache contract, and the naive reference that proves SDPA correct
+description: Grouped-query attention with QK-norm. Why 4 KV heads, what instability QK-norm prevents, the KV cache contract, and the naive reference that proves SDPA correct
 ---
 
 The attention module is where three separate decisions meet: **GQA** (20 query
@@ -53,7 +53,7 @@ def forward(self, x, cos, sin, cache: "KVCache | None" = None) -> torch.Tensor:
    independent `(T, 64)` matrix to the kernel. `q` has 20 heads; `k` and `v` have
    4.
 2. **QK-norm**, then **[RoPE](/docs/architecture/rope)**, on `q` and `k` only.
-3. **Cache update**, if decoding — returns the full history of keys/values.
+3. **Cache update**, if decoding: returns the full history of keys/values.
 4. **SDPA with `enable_gqa=True`** groups the 4 KV heads to the 20 query heads
    internally, with causal masking.
 5. **Merge heads and project out.** `(B, H, T, 64) → (B, T, 1280) → wo → (B, T,
@@ -63,7 +63,7 @@ def forward(self, x, cos, sin, cache: "KVCache | None" = None) -> torch.Tensor:
 
 In vanilla multi-head attention every query head has its own key and value head.
 **Multi-query attention** (MQA) goes to the opposite extreme: all heads share a
-single K/V. **Grouped-query attention** interpolates — `n_kv_head` groups, each
+single K/V. **Grouped-query attention** interpolates: `n_kv_head` groups, each
 shared by `n_head / n_kv_head` query heads. Here `20 / 4 = 5`: query heads 0-4
 share KV head 0, heads 5-9 share KV head 1, and so on.
 
@@ -76,18 +76,18 @@ y = F.scaled_dot_product_attention(
 )
 ```
 
-Conceptually this is the same repeat as before — internally SDPA does
+Conceptually this is the same repeat as before: internally SDPA does
 `key.repeat_interleave(n_head // n_kv_head, dim=-3)` (and the same for `v`),
 lining up each KV head with the `n_head / n_kv_head` query heads that share it,
 consecutively: group `i` covers query heads `5i .. 5i+4` for `d26`'s 5:1 ratio.
 The difference from doing the `repeat_interleave` ourselves is that SDPA's
 fused kernel performs the grouping internally rather than materializing the
-expanded `(B, 20, T, 64)` tensors first — `q`, `k`, and `v` reach the kernel at
+expanded `(B, 20, T, 64)` tensors first: `q`, `k`, and `v` reach the kernel at
 their native 4-head width, so the 5×-larger K/V that GQA exists to avoid is
 never allocated, even transiently. At large batch sizes this saves real memory:
 the expanded copies alone would be several GiB across `d26`'s 26 layers.
 `enable_gqa` is only set `True` when `n_head != n_kv_head`, mirroring the old
-`if rep > 1` guard — when the head counts are equal there is nothing to group,
+`if rep > 1` guard: when the head counts are equal there is nothing to group,
 and passing `False` keeps that case an exact no-op.
 
 The projections and the cache only ever hold 4 heads regardless.
@@ -111,7 +111,7 @@ For `d26` at full context, batch 1:
 2 × 26 × 4 × 2048 × 64 × 2 = 54,525,952 bytes ≈ 52 MiB
 ```
 
-Without GQA — 20 KV heads — the same formula gives:
+Without GQA (20 KV heads), the same formula gives:
 
 ```
 2 × 26 × 20 × 2048 × 64 × 2 = 272,629,760 bytes ≈ 260 MiB
@@ -127,7 +127,7 @@ Without GQA — 20 KV heads — the same formula gives:
 
 The cache scales **linearly with batch size**, and that is the point. The model's
 weights are a fixed ~1 GiB in bf16, paid once. The cache is paid per sequence.
-At batch 32 and full context, MHA's cache alone is 8.13 GiB — several times the
+At batch 32 and full context, MHA's cache alone is 8.13 GiB: several times the
 weights, and the thing that decides how many sequences fit on the card. GQA cuts
 it 5×.
 
@@ -137,11 +137,11 @@ entire cache must be streamed from HBM to compute the scores. Shrinking the cach
 5× cuts that traffic 5×.
 
 **So why not go all the way to MQA?** Quality. Collapsing to a single KV head
-costs measurable perplexity — the heads lose their ability to attend to
-genuinely different things — and it destabilizes training. GQA was introduced
+costs measurable perplexity (the heads lose their ability to attend to
+genuinely different things) and it destabilizes training. GQA was introduced
 (Ainslie et al., 2023) precisely as the interpolation that keeps nearly all of
-MHA's quality at close to MQA's memory. **4 KV heads at 20 query heads** — a 5:1
-sharing ratio — sits in the mainstream band: Llama 2 70B and Llama 3 70B use 8 KV
+MHA's quality at close to MQA's memory. **4 KV heads at 20 query heads**, a 5:1
+sharing ratio, sits in the mainstream band: Llama 2 70B and Llama 3 70B use 8 KV
 heads at 64 query heads (8:1), while Llama 3 8B uses 8 KV heads at 32 query heads
 (4:1). Ours falls between the two, and 4 divides 20 evenly, which
 `ModelConfig.__post_init__` requires.
@@ -157,7 +157,7 @@ q, k = self.q_norm(q), self.k_norm(k)
 
 Two [RMSNorms](/docs/architecture/rmsnorm) over `head_dim = 64`, applied
 per-head to `q` and `k` before the scores are computed. They cost **64 + 64 = 128
-parameters per layer** — 3,328 in the whole model, a rounding error — and they
+parameters per layer** (3,328 in the whole model, a rounding error) and they
 buy training stability.
 
 ### The instability it prevents
@@ -172,14 +172,14 @@ depends entirely on the *spread* of its inputs:
 
 Now consider what happens without a norm on `q` and `k`. Nothing bounds their
 magnitudes. `wq` and `wk` are free to grow during training, and the score is
-**bilinear** in them — if both grow 3×, scores grow 9×. This creates a vicious
+**bilinear** in them: if both grow 3×, scores grow 9×. This creates a vicious
 cycle: larger scores → sharper softmax → the loss rewards confident attention →
 gradients push `wq`/`wk` larger still. Logits drift up over thousands of steps
 until some head saturates, that head's gradients vanish, and it is effectively
 dead. In the worst case a score overflows bf16's range and produces a `NaN` that
 poisons the run.
 
-This is a well-documented failure mode — it is what "attention logit growth"
+This is a well-documented failure mode: it is what "attention logit growth"
 refers to in the ViT-22B paper (Dehghani et al., 2023), which introduced QK-norm
 for exactly this reason, and it is why large runs historically needed z-loss or
 logit soft-capping as workarounds.
@@ -194,12 +194,12 @@ score is bounded by Cauchy-Schwarz:
 
 **The score cannot exceed ±8 regardless of what `wq` and `wk` do**, up to the
 learned gains. The magnitude of the projections is now irrelevant to the score
-scale — only their *direction* matters, which is the only thing attention should
+scale; only their *direction* matters, which is the only thing attention should
 have been keying on in the first place. The learned per-dim gains remain, so the
 model can still modulate sharpness, but it must do so deliberately rather than by
 uncontrolled drift.
 
-Note the norm is over `head_dim`, per head — each head is normalized
+Note the norm is over `head_dim`, per head: each head is normalized
 independently and cannot be dragged around by another head's scale.
 
 ## SDPA and the causal mask
@@ -210,7 +210,7 @@ y = F.scaled_dot_product_attention(q, k, v, is_causal=q.size(2) == k.size(2))
 
 `F.scaled_dot_product_attention` is the one non-trivial primitive not written by
 hand. It computes `softmax(q kᵀ / √d) v` and dispatches to the best available
-backend — **FlashAttention** on CUDA, memory-efficient attention elsewhere, a
+backend: **FlashAttention** on CUDA, memory-efficient attention elsewhere, a
 math fallback on CPU. The reason to use it is not the FLOPs; it is that Flash
 **never materializes the `(T, T)` score matrix**. It tiles the computation and
 fuses the softmax, keeping intermediates in SRAM, turning attention's memory cost
@@ -218,19 +218,19 @@ from `O(T²)` to `O(T)`. At `T = 2048` a naive implementation would allocate
 `20 × 2048 × 2048` scores **per layer per sequence**; Flash allocates none.
 
 The `is_causal` argument is the subtle line. Rather than being hardcoded `True`,
-it is `q.size(2) == k.size(2)` — **causal only when the query and key lengths
+it is `q.size(2) == k.size(2)`, **causal only when the query and key lengths
 match**:
 
-- **Training / prefill** — `q_len == k_len == T`. Every query may only see keys
+- **Training / prefill**: `q_len == k_len == T`. Every query may only see keys
   at or before its own position, so a causal mask is required, and `is_causal=True`
-  makes the kernel apply the triangular mask internally (for free — it skips the
+  makes the kernel apply the triangular mask internally (for free: it skips the
   masked tiles rather than computing and discarding them).
-- **Decoding one token** — `q_len == 1`, `k_len == pos + 1`. The single query is
+- **Decoding one token**: `q_len == 1`, `k_len == pos + 1`. The single query is
   at the *newest* position and must attend to **everything** in the cache. Here
   `is_causal=True` would be actively wrong: SDPA aligns the causal mask to the
   top-left, so with one query row it would mask out all keys but the first,
   attending only to the very first token. The condition evaluates to `False`, no
-  mask is applied, and the query attends to the full history — which is exactly
+  mask is applied, and the query attends to the full history, which is exactly
   correct, since every cached key is by construction in the past.
 
 Causality is verified rather than assumed. `test_attention_is_causal` perturbs
@@ -257,8 +257,8 @@ If the future leaked into the past, positions 0-5 would change. They do not.
 ### The reference oracle
 
 Using someone else's kernel is only acceptable if you can prove it computes what
-you think. `tests/test_model.py` defines attention from scratch — the textbook
-formula, five lines, obviously correct by inspection — and asserts SDPA agrees:
+you think. `tests/test_model.py` defines attention from scratch (the textbook
+formula, five lines, obviously correct by inspection) and asserts SDPA agrees:
 
 ```python
 def reference_attention(q, k, v):
@@ -281,7 +281,7 @@ def test_sdpa_matches_reference():
 This is the whole justification for the one imported primitive. `reference_attention`
 materializes the full `(T, T)` matrix, masks the strict upper triangle with
 `-inf` (so those positions softmax to exactly zero), and multiplies by `v`. It is
-`O(T²)` memory and would never survive a real context length — but it is
+`O(T²)` memory and would never survive a real context length, but it is
 transparently the definition of causal attention, and SDPA matches it to 1e-5. The
 fused kernel is an **optimization of a formula that is spelled out in the repo**,
 not a black box.
@@ -313,7 +313,7 @@ class KVCache:
         self.pos += t
 ```
 
-Without a cache, generating token `n` re-runs the whole prefix — `O(n²)` work per
+Without a cache, generating token `n` re-runs the whole prefix: `O(n²)` work per
 token, `O(n³)` for a sequence. But every previous token's `k` and `v` are
 **unchanged** by appending a new token (causality guarantees it: nothing attends
 forward), so they can simply be stored.
@@ -323,10 +323,10 @@ n_kv_head, max_seq_len, head_dim)`, allocated once up front. No per-step
 `torch.cat`, no reallocation, no growing buffer. `update` writes the new keys
 into the slice at `pos` and returns a **view** of everything up to `pos + t`.
 `advance` bumps the position, called once per forward by `TinyLLM.forward` after
-all layers have written — not per layer, since all 26 layers share one position
+all layers have written, not per layer, since all 26 layers share one position
 counter.
 
-Note this stores keys **after** RoPE and QK-norm — they are cached in their final
+Note this stores keys **after** RoPE and QK-norm: they are cached in their final
 rotated form, valid forever because a key's rotation depends only on its own
 absolute position.
 
@@ -340,16 +340,16 @@ assert T == 1 or cache.pos == 0, (
 
 This assert enforces the docstring's contract, and it is a **correctness guard,
 not a performance hint**. Recall that `is_causal` is `q.size(2) == k.size(2)`.
-For a multi-token forward with a non-empty cache — say 5 new tokens with 100
-cached — `q_len = 5`, `k_len = 105`, so `is_causal` is `False` and **no mask is
+For a multi-token forward with a non-empty cache (say 5 new tokens with 100
+cached), `q_len = 5`, `k_len = 105`, so `is_causal` is `False` and **no mask is
 applied**. Those 5 queries would attend to each other *bidirectionally*: token 1
 of the chunk would see tokens 2-5, which are in its future. The model would
 silently produce wrong output, learning from leaked information.
 
 Rather than build the general block-diagonal mask that chunked prefill needs, the
-code refuses the case loudly. The two supported patterns — one multi-token
-prefill from empty (`pos == 0` → `q_len == k_len` → causal), and single-token
-decode (`T == 1` → no mask needed) — are both provably correct, and they are what
+code refuses the case loudly. The two supported patterns, one multi-token
+prefill from empty (`pos == 0` → `q_len == k_len` → causal) and single-token
+decode (`T == 1` → no mask needed), are both provably correct, and they are what
 `generate` does.
 
 The cache is proven equivalent to the uncached path:
@@ -395,4 +395,4 @@ cache = KVCache(
 logits, _ = self(idx, cache=cache)
 ```
 
-— one prefill of the prompt, then one token per step.
+One prefill of the prompt, then one token per step.

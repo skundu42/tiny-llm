@@ -1,10 +1,10 @@
 ---
 title: tinyllm.tokenizer
-description: BPETokenizer — training, encode/decode, persistence, and the verified fast export, with exact signatures
+description: BPETokenizer; training, encode/decode, persistence, and the verified fast export, with exact signatures
 ---
 
 A byte-level BPE tokenizer written from scratch in 248 lines:
-`tinyllm/tokenizer.py`. No `tokenizers` dependency on the critical path — the HF
+`tinyllm/tokenizer.py`. No `tokenizers` dependency on the critical path: the HF
 library appears only in `export_fast`, as an accelerator that must prove itself
 against this implementation before it is trusted. See
 [Tokenizer](/docs/tokenizer) for the design.
@@ -36,7 +36,7 @@ The comment above it in source explains the one deliberate deviation:
 
 That substitution is what makes `export_fast` able to agree token-for-token.
 Saved into `tokenizer.json` so a loaded tokenizer records the pattern it was
-trained with — and `load` checks it against today's `SPLIT_PATTERN`, raising
+trained with, and `load` checks it against today's `SPLIT_PATTERN`, raising
 rather than mis-encoding if they differ (see [`load`](#load) below). See
 [Tokenizer training](/docs/tokenizer/training).
 
@@ -46,7 +46,7 @@ rather than mis-encoding if they differ (see [`load`](#load) below). See
 ENDOFTEXT = "<|endoftext|>"
 ```
 
-**Type:** `str`. The only special token. Id **32767** in the canonical tokenizer —
+**Type:** `str`. The only special token. Id **32767** in the canonical tokenizer:
 `256 + len(merges)`, i.e. always last.
 
 ## `BPETokenizer`
@@ -61,8 +61,8 @@ class BPETokenizer:
         ...
 ```
 
-**Args:** `merges` — ordered list of `(id_a, id_b)` pairs; **order is rank**, and
-rank is what decides which merge applies first. `special_tokens` — name → id.
+**Args:** `merges`: ordered list of `(id_a, id_b)` pairs; **order is rank**, and
+rank is what decides which merge applies first. `special_tokens`: name → id.
 
 Both default to empty, so `BPETokenizer()` is a valid byte-level tokenizer with
 256 tokens and no merges.
@@ -84,7 +84,7 @@ def vocab_size(self) -> int:
 **Returns:** `int`. For the canonical tokenizer: `256 + 32511 + 1` = **32,768**.
 
 The three terms are the whole vocabulary design: every byte, every learned merge,
-one special token. **Byte coverage is total** — there is no `<unk>` and no input
+one special token. **Byte coverage is total**: there is no `<unk>` and no input
 this tokenizer cannot encode.
 
 ### `eot_id`
@@ -95,7 +95,7 @@ def eot_id(self) -> int:
     return self.special_tokens[ENDOFTEXT]
 ```
 
-**Returns:** `int` — **32767** canonically. **Raises:** `KeyError` if the
+**Returns:** `int`: **32767** canonically. **Raises:** `KeyError` if the
 tokenizer has no `<|endoftext|>`.
 
 ### `train`
@@ -117,8 +117,8 @@ def train(
 
 | Arg | Default | Meaning |
 |---|---|---|
-| `texts` | — | Iterable of documents. **Streamed** — never fully materialized. |
-| `vocab_size` | — | Target size. Merges run = `vocab_size - 256 - 1`. |
+| `texts` | | Iterable of documents. **Streamed**, never fully materialized. |
+| `vocab_size` | | Target size. Merges run = `vocab_size - 256 - 1`. |
 | `num_proc` | `1` | Processes for pre-tokenization counting. `> 1` uses a `Pool`. |
 | `min_word_freq` | `1` | Drop pre-tokens rarer than this before merging. |
 | `verbose` | `False` | Print `merge N/M` every 1000 merges. |
@@ -126,13 +126,13 @@ def train(
 **Returns:** a new `BPETokenizer` with `{ENDOFTEXT: 256 + len(merges)}`.
 
 **Raises:** `AssertionError` if `vocab_size < 257` ("need room for 256 bytes +
-`<|endoftext|>`"). `vocab_size == 257` is legal — 256 byte tokens plus
+`<|endoftext|>`"). `vocab_size == 257` is legal: 256 byte tokens plus
 `<|endoftext|>` and zero merges.
 
 Two properties worth relying on:
 
-- **Deterministic.** Ties are broken explicitly — `max(pair_counts.items(),
-  key=lambda kv: (kv[1], (-kv[0][0], -kv[0][1])))` — highest count first, then
+- **Deterministic.** Ties are broken explicitly (`max(pair_counts.items(),
+  key=lambda kv: (kv[1], (-kv[0][0], -kv[0][1])))`), highest count first, then
   smallest pair ids. Same corpus in, same merges out, regardless of dict ordering.
 - **Tractable in pure Python** because it counts *unique* pre-tokens once with a
   frequency weight and maintains an incremental `pair_counts` / `pair_to_words`
@@ -158,7 +158,7 @@ def encode(self, text: str) -> list[int]:
     """Encode text to token ids. Special tokens are never produced."""
 ```
 
-**Args:** `text` — any `str`. **Returns:** `list[int]`.
+**Args:** `text`: any `str`. **Returns:** `list[int]`.
 
 Pre-tokenizes with `SPLIT_PATTERN`, then greedily applies the lowest-rank merge
 within each pre-token until none apply. Per-word results are memoized
@@ -167,7 +167,7 @@ within each pre-token until none apply. Per-word results are memoized
 <Callout type="warn">
   **Special tokens are never produced by `encode`.** `"<|endoftext|>"` in the input
   encodes as its literal characters, not as id 32767. This is a security property,
-  not an oversight — text from a user cannot inject a document boundary. To emit
+  not an oversight: text from a user cannot inject a document boundary. To emit
   one, prepend `tok.eot_id` yourself, as [`tinyllm.sample`](/docs/api/sample-and-eval#main)
   and [`prepare_data`](/docs/api/data#scriptsprepare_datapy) both do.
 </Callout>
@@ -179,12 +179,12 @@ def decode(self, ids: Sequence[int]) -> str:
     ...
 ```
 
-**Args:** `ids` — any sequence of ints. **Returns:** `str`.
+**Args:** `ids`: any sequence of ints. **Returns:** `str`.
 
 Special ids map back to their literal text; everything else concatenates
 `vocab[i]` bytes and decodes utf-8 with `errors="replace"`. The `replace` matters:
 a token boundary can split a multi-byte codepoint, so decoding a *partial* stream
-yields `` — never an exception.
+yields ``, never an exception.
 
 ```python
 from tinyllm import BPETokenizer
@@ -215,7 +215,7 @@ data = {
 }
 ```
 
-**The merges are the tokenizer.** `vocab` is derived on load, never stored — it
+**The merges are the tokenizer.** `vocab` is derived on load, never stored; it
 cannot drift out of sync with the merges that generate it. See
 [Format and the fast path](/docs/tokenizer/format-and-fast-path).
 
@@ -231,14 +231,14 @@ def load(cls, path: str) -> "BPETokenizer":
 file's `"pattern"` is present and does not match today's `SPLIT_PATTERN`.
 
 JSON turns tuples into lists, so merges are re-tupled on the way in
-(`[tuple(m) for m in data["merges"]]`) — `merge_ranks` is keyed by tuple and lists
+(`[tuple(m) for m in data["merges"]]`): `merge_ranks` is keyed by tuple and lists
 are unhashable.
 
 `"pattern"` **is now validated**, not just recorded: if `data.get("pattern")` is
 present and differs from the module-level `SPLIT_PATTERN`, `load` raises rather
 than silently reloading under today's pattern. A tokenizer saved under a
 different `SPLIT_PATTERN` would otherwise load "successfully" and mis-encode
-every input — the merges are byte-pair ids trained against a specific
+every input: the merges are byte-pair ids trained against a specific
 pre-tokenization, and pre-tokenizing differently changes which words see which
 merges. Files with no `"pattern"` key (or `null`) load unchanged, for
 compatibility with tokenizers saved before this field existed.
@@ -255,7 +255,7 @@ def export_fast(self):
 ```
 
 **Args:** none. **Returns:** a `tokenizers.Tokenizer`. **Imports `tokenizers`
-lazily** — the dependency is not needed to train, encode, or decode.
+lazily**: the dependency is not needed to train, encode, or decode.
 
 Rebuilds the vocab through GPT-2's reversible byte→printable-unicode table, since
 HF's BPE model is keyed by `str` and ours by `bytes`. Roughly **100× faster** for
@@ -268,7 +268,7 @@ def verify_fast(self, fast, texts: Iterable[str]) -> None:
     """Assert `fast` produces byte-identical ids to our encoder."""
 ```
 
-**Args:** `fast` — a tokenizer from `export_fast`; `texts` — documents to check.
+**Args:** `fast`: a tokenizer from `export_fast`; `texts`: documents to check.
 **Returns:** `None`. **Raises:** `ValueError` on the first mismatch, quoting the
 offending text.
 
@@ -289,7 +289,7 @@ tok.verify_fast(fast, itertools.islice(docs, 200))   # raises on any disagreemen
 ids = [e.ids for e in fast.encode_batch(["hello world", "goodbye"])]
 ```
 
-This is exactly what `prepare_data.py` does before encoding a corpus — 200 real
+This is exactly what `prepare_data.py` does before encoding a corpus: 200 real
 documents, and the run aborts if a single id differs.
 
 ## `scripts/train_tokenizer.py`
@@ -307,7 +307,7 @@ uv run python scripts/train_tokenizer.py --max-bytes 250000000
 | `--min-word-freq` | `2` | Drop pre-tokens seen once |
 
 Streams FineWeb-Edu `sample-10BT`, trains, saves, then measures compression on
-**100 held-out documents** — taken from the same iterator *after* training, so
+**100 held-out documents**, taken from the same iterator *after* training, so
 they are genuinely unseen:
 
 ```python
@@ -318,5 +318,5 @@ print(f"compression on holdout: {nbytes / ntok:.3f} bytes/token")
 ```
 
 **Measured:** `4.517 bytes/token`. The canonical `tokenizer/tokenizer.json` is
-**committed** — see the [smoke runbook](/docs/runbooks/local-smoke#step-2-train-the-canonical-tokenizer)
+**committed**; see the [smoke runbook](/docs/runbooks/local-smoke#step-2-train-the-canonical-tokenizer)
 for why you should not retrain it.

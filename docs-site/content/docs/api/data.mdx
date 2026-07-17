@@ -1,6 +1,6 @@
 ---
 title: tinyllm.data
-description: ShardWriter and TokenShards — the uint16 shard format, memmapped random-crop sampling, and the prepare_data CLI
+description: ShardWriter and TokenShards; the uint16 shard format, memmapped random-crop sampling, and the prepare_data CLI
 ---
 
 100 lines: `tinyllm/data.py`. One class writes token ids into fixed-size uint16
@@ -40,14 +40,14 @@ class ShardWriter:
         ...
 ```
 
-**Args:** `out_dir` — created if missing; `split` — `"train"` / `"val"`, used as
-the filename prefix and the index key; `shard_tokens` — tokens per shard.
+**Args:** `out_dir`: created if missing; `split`: `"train"` / `"val"`, used as
+the filename prefix and the index key; `shard_tokens`: tokens per shard.
 
 **Raises:** `ValueError` if `out_dir`'s `index.json` already lists a non-empty
-`split` — *"already contains a 'train' split; use a fresh directory"*.
+`split`: *"already contains a 'train' split; use a fresh directory"*.
 
-**Attributes:** `total_written` — tokens accepted by `write()`; `entries` — shard
-records so far; `buffer`, `fill` — the in-memory shard being filled.
+**Attributes:** `total_written`: tokens accepted by `write()`; `entries`: shard
+records so far; `buffer`, `fill`: the in-memory shard being filled.
 
 That guard is the useful part. Shard writing is append-only and an interrupted
 run leaves a partial `index.json`; silently appending to it would interleave two
@@ -75,15 +75,15 @@ def write(self, ids: Sequence[int]) -> None:
             self._flush()
 ```
 
-**Args:** `ids` — any sequence of ints, **any length**. **Returns:** `None`.
+**Args:** `ids`: any sequence of ints, **any length**. **Returns:** `None`.
 
 The `while` loop is what makes the caller's life simple: a document longer than a
 shard is split across as many as it needs, and **documents are never padded or
-truncated to shard boundaries**. Shards are a storage detail, not a semantic one —
+truncated to shard boundaries**. Shards are a storage detail, not a semantic one:
 a document can straddle two, and the sampler does not care.
 
 `np.uint16` caps the vocabulary at **65,536**. At 32,768 we use half the range and
-each token costs **2 bytes** — 10B tokens = ~19 GiB rather than the ~37 GiB
+each token costs **2 bytes**: 10B tokens = ~19 GiB rather than the ~37 GiB
 `int32` would need.
 
 ### `close`
@@ -99,7 +99,7 @@ Flushes the partial shard, then merges this split's entries into `index.json`,
 **preserving other splits** (it re-reads the file first) and writing via
 `tmp` + `os.replace` so the index is never observed half-written.
 
-**Always call it** — the last shard and the entire index depend on it.
+**Always call it**: the last shard and the entire index depend on it.
 
 ```python
 from tinyllm.data import ShardWriter
@@ -121,15 +121,15 @@ class TokenShards:
         ...
 ```
 
-**Args:** `data_dir` — directory containing `index.json`; `split` — key to load.
+**Args:** `data_dir`: directory containing `index.json`; `split`: key to load.
 
 **Raises:** `FileNotFoundError` if no index; `KeyError` if the split is absent.
 
-**Attributes:** `shards` — a `list[np.memmap]`, one per `.bin`; `sizes` —
-`np.ndarray[int64]` of token counts; `total_tokens` — `int`, their sum.
+**Attributes:** `shards`: a `list[np.memmap]`, one per `.bin`; `sizes`:
+`np.ndarray[int64]` of token counts; `total_tokens`: `int`, their sum.
 
 `np.memmap` is the reason there is no `DataLoader`. The shards are **never read
-into RAM** — the OS page cache serves the crops on demand, so a 19 GiB corpus opens
+into RAM**: the OS page cache serves the crops on demand, so a 19 GiB corpus opens
 instantly at near-zero memory and the hot pages stay cached. Sampling is fast
 enough inline that a background worker would be pure overhead.
 
@@ -155,11 +155,11 @@ def sample_batch(self, batch_size: int, seq_len: int, rng: np.random.Generator,
     return x, y
 ```
 
-**Args:** `batch_size` — sequences; `seq_len` — tokens per sequence; `rng` — a
+**Args:** `batch_size`: sequences; `seq_len`: tokens per sequence; `rng`: a
 `np.random.Generator`, **supplied by the caller**; `device`.
 
 **Returns:** `(x, y)`, each `(batch_size, seq_len)` `int64`, where `y` is `x`
-shifted one position — the next-token targets.
+shifted one position, the next-token targets.
 
 **Raises:** `AssertionError` if no shard can fit `seq_len + 1`.
 
@@ -168,7 +168,7 @@ Four things worth knowing:
 - **`seq_len + 1` tokens are read, then split.** One crop yields both input and
   target; `x[i]` predicts `y[i]` at every position, so every token in the batch is
   a training signal.
-- **Shards are weighted by usable crop count**, not uniformly — `p = positions /
+- **Shards are weighted by usable crop count**, not uniformly: `p = positions /
   positions.sum()`. Without it, `smoke`'s 7,998,487-token tail shard would be drawn
   as often as a 25,000,000-token one and its tokens would be oversampled ~3×. This
   makes the sample **uniform over positions**, which is what "random crop over the
@@ -176,8 +176,8 @@ Four things worth knowing:
 - **The RNG is a parameter, not state.** The caller builds a fresh
   `np.random.default_rng([seed, rank, step, micro])` per call, so a batch is a pure
   function of its coordinates. This is what makes [resume](/docs/training/checkpointing)
-  bit-exact and DDP ranks disjoint — no generator state to checkpoint.
-- **Crops can straddle document boundaries**, and that is deliberate — the
+  bit-exact and DDP ranks disjoint: no generator state to checkpoint.
+- **Crops can straddle document boundaries**, and that is deliberate: the
   `<|endoftext|>` between documents teaches the model where they end.
 
 ```python
@@ -230,7 +230,7 @@ print("fast tokenizer verified token-identical on 200 docs")
 docs = itertools.chain(sample, docs)
 ```
 
-**The val/train router.** Validation fills first; everything after goes to train —
+**The val/train router.** Validation fills first; everything after goes to train,
 so the splits are **disjoint by construction** and no document spans both:
 
 ```python
@@ -241,7 +241,7 @@ for ids in encs:
     total += len(ids)
 ```
 
-Note `ids.append(eot)` — **every document is terminated with `<|endoftext|>`**,
+Note `ids.append(eot)`: **every document is terminated with `<|endoftext|>`**,
 which is the token that teaches the model where documents end and is why
 [`tinyllm.sample`](/docs/api/sample-and-eval#main) prefixes prompts with it.
 

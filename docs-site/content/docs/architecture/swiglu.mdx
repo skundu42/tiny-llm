@@ -1,9 +1,9 @@
 ---
 title: SwiGLU
-description: The gated MLP — what the gate does, why SiLU, and where d_ff = 3456 comes from as a parameter-budget match to a classic 4× GELU MLP
+description: The gated MLP. What the gate does, why SiLU, and where d_ff = 3456 comes from as a parameter-budget match to a classic 4× GELU MLP
 ---
 
-The MLP is where **77% of every block's parameters** live — 13,271,040 of
+The MLP is where **77% of every block's parameters** live: 13,271,040 of
 17,205,888. Attention moves information between positions; the MLP is what
 actually processes it, position by position. `tinyllm` uses SwiGLU (Shazeer,
 2020), the gated variant that every recent open model has converged on.
@@ -60,8 +60,8 @@ back.
 The difference from a plain MLP is that the nonlinearity is now **data-dependent
 in a multiplicative way**. In `W_down · σ(W_up · x)`, each hidden unit's
 activation is a fixed scalar function of one projection of `x`. In SwiGLU, each
-hidden unit's output is a **product of two different learned projections of `x`**
-— which makes it a *quadratic* (bilinear) function of the input rather than a
+hidden unit's output is a **product of two different learned projections of `x`**,
+which makes it a *quadratic* (bilinear) function of the input rather than a
 pointwise-transformed linear one.
 
 Concretely, the gate lets the network learn "let feature `j` through **only when
@@ -69,24 +69,24 @@ some other condition on `x` holds**," with the gate and the condition learned
 separately. A plain MLP has to encode any such conditionality inside a single
 projection's nonlinearity. Multiplicative interactions are cheap to compute and
 hard to emulate with additive structure, which is the intuition for why gating
-helps — the same intuition behind LSTM gates and highway networks.
+helps, the same intuition behind LSTM gates and highway networks.
 
 Shazeer's own summary of *why* it works remains the honest one: the GLU family
 variants simply score better on the benchmarks, and he concluded the paper by
 attributing their success to "divine benevolence." The empirical result is solid
 and universal (Llama, PaLM, Mistral, Qwen, Gemma all use it); the theory is
 hand-wavy. It is included here because it measurably works, at equal parameter
-count — which is the next section.
+count, which is the next section.
 
 ### Why SiLU
 
 SiLU (a.k.a. Swish) is `z · sigmoid(z)`. Its useful properties as a gate:
 
-- **Smooth**, unlike ReLU's kink at zero — it is differentiable everywhere, which
+- **Smooth**, unlike ReLU's kink at zero; it is differentiable everywhere, which
   matters for a function whose output multiplies another branch.
 - **Non-monotonic**, with a small negative dip around `z ≈ -1.28`, so slightly
   negative inputs produce slightly negative gates rather than being clamped away.
-- **Self-gating and unbounded above** — for large `z`, `sigmoid(z) → 1` and
+- **Self-gating and unbounded above**: for large `z`, `sigmoid(z) → 1` and
   `SiLU(z) → z`, so a strongly-on gate passes content through roughly linearly
   instead of saturating at a ceiling.
 - **No dead units.** ReLU's gradient is exactly zero for all negative inputs, so
@@ -94,7 +94,7 @@ SiLU (a.k.a. Swish) is `z · sigmoid(z)`. Its useful properties as a gate:
   there.
 
 Compared to GELU (`z · Φ(z)`, the other smooth choice), SiLU is nearly identical
-in shape and slightly cheaper — a sigmoid rather than an erf or its tanh
+in shape and slightly cheaper: a sigmoid rather than an erf or its tanh
 approximation. `F.silu` is a single fused kernel.
 
 ## Where d_ff = 3456 comes from
@@ -113,7 +113,7 @@ That `8·d²` per layer is the historical feed-forward budget everyone's intuiti
 and scaling-law fits are calibrated against.
 
 **The problem.** SwiGLU has **three** matrices instead of two. Naively keeping
-`d_ff = 4d` would cost `3 × d × 4d = 12·d²` — a **50% increase** in MLP
+`d_ff = 4d` would cost `3 × d × 4d = 12·d²`, a **50% increase** in MLP
 parameters. Any measured win would then be confounded: is the gate helping, or
 just the extra 50% of parameters?
 
@@ -137,7 +137,7 @@ and the resulting budget:
 3 × d × d_ff = 3 × 2.7 × d² = 8.1 · d²   ≈   8 · d²   ✓
 ```
 
-**8.1·d² vs. 8·d² — parameter-budget-matched to within 1.25%.** The three-matrix
+**8.1·d² vs. 8·d²: parameter-budget-matched to within 1.25%.** The three-matrix
 SwiGLU with `d_ff = 2.7d` costs essentially the same as the two-matrix `4d` GELU
 MLP it replaces. This is why `d_ff` is not a round number: it is `8/3 · d_model`,
 rounded for alignment.
@@ -151,12 +151,12 @@ Checking against the real tensors:
 | `w_down` | 3456 × 1280 | 4,423,680 |
 | **Total** | 3 × 1280 × 3456 | **13,271,040** |
 
-And `8 × 1280² = 13,107,200` — the classic-MLP budget. The SwiGLU block is
+And `8 × 1280² = 13,107,200`, the classic-MLP budget. The SwiGLU block is
 13,271,040, **1.25% larger**, for a genuinely better MLP. That is the trade being
 made.
 
 The `smoke` preset holds the same ratio: `768 / 256 = 3.0` (rounded to a
-multiple of 256 at that tiny width, so it drifts slightly above 2.7 — the
+multiple of 256 at that tiny width, so it drifts slightly above 2.7; the
 alignment constraint dominates when `d_model` is small).
 
 ## No biases
@@ -164,18 +164,18 @@ alignment constraint dominates when `d_model` is small).
 None of the three `nn.Linear`s have a bias, matching every other projection in
 the model. Biases in transformer linear layers were dropped around the PaLM/Llama
 generation because they contribute essentially nothing to quality while costing
-parameters, memory traffic, and — in the pre-norm setting — a small amount of
+parameters, memory traffic, and, in the pre-norm setting, a small amount of
 training instability. An `RMSNorm` immediately upstream has already removed any
 meaningful offset the bias could correct for.
 
 ## Where these weights go
 
 `w_gate`, `w_up`, and `w_down` are all 2-D and not named `embed`, so all three
-land in the **`hidden` bucket and are trained by Muon** — they are three of the
+land in the **`hidden` bucket and are trained by Muon**: they are three of the
 seven matrices per block that get orthogonalized updates. See [the parameter
 split](/docs/training/muon#the-parameter-split-who-gets-muon).
 
-`w_down` gets one extra treatment: as a **residual projection** — the last op
-before the block's output is added back into the residual stream — it is
+`w_down` gets one extra treatment: as a **residual projection** (the last op
+before the block's output is added back into the residual stream), it is
 re-initialized to `std = 0.02/√(2·n_layer)` instead of `0.02`. See [residual
 scaling](/docs/architecture/embeddings-and-init#residual-scaling).

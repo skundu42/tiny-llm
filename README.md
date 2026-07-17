@@ -1,10 +1,10 @@
 # tiny-llm
 
-A ~500M-parameter decoder-only language model, pretrained entirely from scratch in Python/PyTorch — the transformer, the byte-level BPE tokenizer, the data pipeline, the Muon+AdamW optimizer, and the training loop are all hand-written here, with no `transformers` and no pre-built model components. Development and correctness verification happen locally on Apple Silicon (CPU/MPS); the real pretraining run targets a rented cloud GPU.
+A ~500M-parameter decoder-only language model, pretrained entirely from scratch in Python/PyTorch. The transformer, the byte-level BPE tokenizer, the data pipeline, the Muon+AdamW optimizer, and the training loop are all implemented in this repo, with no `transformers` and no pre-built model components. Development and correctness verification happen locally on Apple Silicon (CPU/MPS); the real pretraining run targets a rented cloud GPU.
 
 ## Architecture
 
-`tinyllm/model.py` implements every layer by hand: RMSNorm pre-norm, RoPE, grouped-query attention with QK-norm, SwiGLU, tied embeddings, no biases anywhere. Two presets ship in `tinyllm/config.py`:
+`tinyllm/model.py` implements every layer from scratch: RMSNorm pre-norm, RoPE, grouped-query attention with QK-norm, SwiGLU, tied embeddings, no biases anywhere. Two presets ship in `tinyllm/config.py`:
 
 | Hyperparameter | `d26` (target) | `smoke` (local dev) |
 |---|---|---|
@@ -21,7 +21,7 @@ A ~500M-parameter decoder-only language model, pretrained entirely from scratch 
 | Embeddings | Tied input/output | same |
 | Biases | None | None |
 
-Optimization uses a **Muon + AdamW hybrid**: Muon (momentum + Newton-Schulz orthogonalization) for all 2-D hidden weight matrices, AdamW for embeddings and RMSNorm gains, under a warmup-stable-decay (WSD) LR schedule. Training runs in bf16 autocast, with `torch.compile` on CUDA and plain DDP via `torchrun` for multi-GPU — single-GPU is the degenerate case of the same code path.
+Optimization uses a **Muon + AdamW hybrid**: Muon (momentum + Newton-Schulz orthogonalization) for all 2-D hidden weight matrices, AdamW for embeddings and RMSNorm gains, under a warmup-stable-decay (WSD) LR schedule. Training runs in bf16 autocast, with `torch.compile` on CUDA and plain DDP via `torchrun` for multi-GPU; single-GPU is the degenerate case of the same code path.
 
 ## Quickstart
 
@@ -32,7 +32,7 @@ uv run pytest -q                    # 58 tests, a few seconds
 
 The test suite covers every component (tokenizer, model, Muon, data sharding, training loop, eval) against hand-derived reference implementations, and needs no downloaded data.
 
-To exercise the full training loop end-to-end on a laptop, use the `smoke` config (13.1M params, 6 layers) against a small locally-prepared shard set — this trains on Apple Silicon MPS (or CPU) in roughly 15-30 minutes:
+To exercise the full training loop end-to-end on a laptop, use the `smoke` config (13.1M params, 6 layers) against a small locally-prepared shard set; this trains on Apple Silicon MPS (or CPU) in roughly 15-30 minutes:
 
 ```bash
 uv run python scripts/prepare_data.py --data-dir data/smoke \
@@ -40,7 +40,7 @@ uv run python scripts/prepare_data.py --data-dir data/smoke \
 uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json
 ```
 
-(`prepare_data.py` needs a trained tokenizer first — see below.)
+(`prepare_data.py` needs a trained tokenizer first; see below.)
 
 ## Tokenizer training
 
@@ -59,7 +59,7 @@ Every flag has a sane default (see `--help`); this is the one that produces the 
 
 ## Data preparation
 
-`scripts/prepare_data.py` streams the same FineWeb-Edu subset, encodes it with the trained tokenizer, and writes uint16 token shards (`tinyllm.data.ShardWriter`) plus a JSON index — validation shard(s) filled first, then train shards, with `tok.eot_id` appended after every document:
+`scripts/prepare_data.py` streams the same FineWeb-Edu subset, encodes it with the trained tokenizer, and writes uint16 token shards (`tinyllm.data.ShardWriter`) plus a JSON index: validation shard(s) filled first, then train shards, with `tok.eot_id` appended after every document:
 
 ```bash
 uv run python scripts/prepare_data.py \
@@ -70,22 +70,24 @@ uv run python scripts/prepare_data.py \
     --max-tokens 0
 ```
 
-`--max-tokens 0` (the default) consumes the entire `sample-10BT` subset (~10B tokens, roughly Chinchilla-optimal for the `d26` model size); pass a smaller value for a quick local subset. By default the script takes a **fast path**: it exports the trained BPE merges to a HuggingFace `tokenizers` object (`export_fast()`), verifies it is token-identical to our own encoder on the first 200 documents (`verify_fast`), and then bulk-encodes in batches of 512 docs — pass `--slow` to force the pure-Python encoder instead (much slower, used only as a fallback/cross-check).
+`--max-tokens 0` (the default) consumes the entire `sample-10BT` subset (~10B tokens, roughly Chinchilla-optimal for the `d26` model size); pass a smaller value for a quick local subset. By default the script takes a **fast path**: it exports the trained BPE merges to a HuggingFace `tokenizers` object (`export_fast()`), verifies it is token-identical to our own encoder on the first 200 documents (`verify_fast`), and then bulk-encodes in batches of 512 docs; pass `--slow` to force the pure-Python encoder instead (much slower, used only as a fallback/cross-check).
+
+Both `train_tokenizer.py` and `prepare_data.py` also accept `--dataset`, `--dataset-config`, `--split`, and `--text-key`, so any HuggingFace text dataset can stand in for FineWeb-Edu; the docs site has a full runbook (Runbooks > Train on a custom dataset) including a laptop-scale TinyStories example.
 
 ## Local smoke runbook
 
 1. `uv sync`
-2. `uv run pytest -q` — confirm the suite is green.
+2. `uv run pytest -q`: confirm the suite is green.
 3. Train a tokenizer on a small byte budget (a few minutes): `uv run python scripts/train_tokenizer.py --max-bytes 20_000_000`.
 4. Prepare a small shard set: `uv run python scripts/prepare_data.py --data-dir data/smoke --max-tokens 60000000 --val-tokens 2000000 --shard-tokens 25000000`.
-5. Train: `uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json` — logs to `out/smoke/log.csv`, checkpoints to `out/smoke/ckpt_last.pt`, periodic sample generations printed to stdout.
+5. Train: `uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json`; logs to `out/smoke/log.csv`, checkpoints to `out/smoke/ckpt_last.pt`, periodic sample generations printed to stdout.
 6. Sample from the checkpoint: `uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"`.
 
 This whole loop runs on CPU or Apple Silicon MPS and needs no GPU: `torch.compile` is automatically disabled off-CUDA (no `--no-compile` flag needed), and precision falls back to fp32 when `--dtype` is left at its `auto` default.
 
 ## Cloud runbook
 
-The real pretraining run — `d26`, ~10B FineWeb-Edu tokens (approximately Chinchilla-optimal for 489M params) — is sized for a rented GPU box:
+The real pretraining run, `d26`, ~10B FineWeb-Edu tokens (approximately Chinchilla-optimal for 489M params), is sized for a rented GPU box:
 
 | Setup | Wall time | Approx. cost |
 |---|---|---|
@@ -95,7 +97,7 @@ The real pretraining run — `d26`, ~10B FineWeb-Edu tokens (approximately Chinc
 Steps on a fresh Ubuntu GPU box (Lambda Labs, RunPod, etc.):
 
 1. Copy the repo (and, if you already have one, `tokenizer/tokenizer.json`) onto the box.
-2. Run the bootstrap script — idempotent, installs `uv` if missing and runs `uv sync`, then prints the exact next commands (it skips the tokenizer step if `tokenizer/tokenizer.json` is already present):
+2. Run the bootstrap script: idempotent, installs `uv` if missing and runs `uv sync`, then prints the exact next commands (it skips the tokenizer step if `tokenizer/tokenizer.json` is already present):
    ```bash
    bash scripts/cloud_setup.sh
    ```
@@ -119,7 +121,7 @@ Steps on a fresh Ubuntu GPU box (Lambda Labs, RunPod, etc.):
    ```bash
    uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json --resume
    ```
-7. Monitor progress via `out/d26/log.csv` (or Weights & Biases, if `--wandb <project>` was passed) — step, train/val loss, LR scale, tokens/sec, and MFU (populated on CUDA against a recognized GPU).
+7. Monitor progress via `out/d26/log.csv` (or Weights & Biases, if `--wandb <project>` was passed): step, train/val loss, LR scale, tokens/sec, and MFU (populated on CUDA against a recognized GPU).
 8. Once trained, evaluate and sample from the final checkpoint:
    ```bash
    uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --limit 1000
@@ -128,7 +130,7 @@ Steps on a fresh Ubuntu GPU box (Lambda Labs, RunPod, etc.):
 
 ## Documentation site
 
-A more detailed, browsable writeup — architecture deep-dives, tokenizer theory, training internals, runbooks, and a per-module API reference — lives in `docs-site/` (a Fumadocs/Next.js site, MDX content, pnpm-managed):
+A more detailed, browsable writeup (architecture deep-dives, tokenizer theory, training internals, runbooks, and a per-module API reference) lives in `docs-site/` (a Fumadocs/Next.js site, MDX content, pnpm-managed):
 
 ```bash
 cd docs-site

@@ -1,6 +1,6 @@
 ---
 title: tinyllm.train
-description: lr_scale, run, main and PEAK_FLOPS — the pretraining entry point, its return value, and the full CLI
+description: lr_scale, run, main and PEAK_FLOPS; the pretraining entry point, its return value, and the full CLI
 ---
 
 289 lines: `tinyllm/train.py`. bf16 autocast, gradient accumulation, the WSD
@@ -16,7 +16,7 @@ PEAK_FLOPS = {"NVIDIA H100": 989e12, "NVIDIA A100": 312e12}
 
 **Type:** `dict[str, float]`. Dense bf16 peak FLOP/s for each recognized GPU.
 `_peak_flops(device)` looks up the current GPU in this dict by matching
-`torch.cuda.get_device_name()` against each key **by substring** — a real
+`torch.cuda.get_device_name()` against each key **by substring**: a real
 device name like `"NVIDIA H100 80GB HBM3"` contains the key `"NVIDIA H100"`.
 Off CUDA, or on a GPU that matches no key, it returns `None` and MFU is left
 uncomputable for that run rather than guessed.
@@ -32,7 +32,7 @@ mfu = flops_per_token * tok_s / peak_flops if peak_flops else None
 `N` is `raw_model.num_params(non_embedding=True)`, computed once outside the
 loop. At `d26`'s 447,354,368 non-embedding parameters, `flops_per_token ≈
 3.50e9`; at a hypothetical 139k tok/s on an H100 that is `3.50e9 × 139e3 /
-989e12` ≈ **49%** MFU — an illustrative number, not a measured one, since this
+989e12` ≈ **49%** MFU, an illustrative number, not a measured one, since this
 repo has not yet run the full `d26` config on real hardware. See
 [MFU](/docs/training#logging-throughput-and-mfu).
 
@@ -49,19 +49,19 @@ def lr_scale(step: int, total: int, warmup: int, decay_frac: float) -> float:
     return max(1e-8, (total - step) / (total - decay_start))
 ```
 
-**Args:** `step` — current step (0-based); `total` — total steps; `warmup` —
-warmup steps; `decay_frac` — final fraction of steps spent decaying.
+**Args:** `step`: current step (0-based); `total`: total steps; `warmup`:
+warmup steps; `decay_frac`: final fraction of steps spent decaying.
 
-**Returns:** `float` in `(0, 1]` — a **multiplier**, not a learning rate. The loop
+**Returns:** `float` in `(0, 1]`: a **multiplier**, not a learning rate. The loop
 applies it as `group["lr"] = group["initial_lr"] * scale` to every group of both
 optimizers, so Muon's `0.02` and AdamW's `6e-4` share one curve.
 
-A pure function of its arguments — no internal state, nothing to checkpoint,
+A pure function of its arguments: no internal state, nothing to checkpoint,
 which is part of why resume is exact.
 
 | Phase | Condition | Value |
 |---|---|---|
-| Warmup | `step < warmup` | `(step + 1) / warmup` — linear `1/warmup` → `1.0` |
+| Warmup | `step < warmup` | `(step + 1) / warmup`: linear `1/warmup` → `1.0` |
 | Stable | `step < int(total × (1 - decay_frac))` | `1.0` |
 | Decay | otherwise | linear → `0`, floored at `1e-8` |
 
@@ -69,11 +69,11 @@ which is part of why resume is exact.
 from tinyllm.train import lr_scale
 
 # the smoke schedule: 600 steps, 20 warmup, 20% decay
-print(lr_scale(0, 600, 20, 0.2))      # 0.05   — first step
-print(lr_scale(19, 600, 20, 0.2))     # 1.0    — warmup complete
-print(lr_scale(300, 600, 20, 0.2))    # 1.0    — plateau
-print(lr_scale(500, 600, 20, 0.2))    # 0.833  — decaying (starts at step 480)
-print(lr_scale(599, 600, 20, 0.2))    # 0.0083 — last step
+print(lr_scale(0, 600, 20, 0.2))      # 0.05,   first step
+print(lr_scale(19, 600, 20, 0.2))     # 1.0,    warmup complete
+print(lr_scale(300, 600, 20, 0.2))    # 1.0,    plateau
+print(lr_scale(500, 600, 20, 0.2))    # 0.833,  decaying (starts at step 480)
+print(lr_scale(599, 600, 20, 0.2))    # 0.0083, last step
 ```
 
 Those are the exact values the [recorded smoke run](/docs/runbooks/local-smoke#what-the-numbers-say)
@@ -98,8 +98,8 @@ The whole pretraining loop. Everything `main()` does is parse flags and call thi
 
 | Arg | Default | Meaning |
 |---|---|---|
-| `model_cfg` | — | A `ModelConfig` |
-| `train_cfg` | — | A `TrainConfig` |
+| `model_cfg` | | A `ModelConfig` |
+| `train_cfg` | | A `TrainConfig` |
 | `tokenizer_path` | `None` | If given, loads a tokenizer and prints a sample every `sample_every` steps |
 | `resume` | `False` | Load `{out_dir}/ckpt_last.pt` and continue from its step |
 | `device` | `None` | Auto-selects `cuda` → `mps` → `cpu`. **Ignored under DDP** |
@@ -112,9 +112,9 @@ The whole pretraining loop. Everything `main()` does is parse flags and call thi
 
 | Key | Type | Meaning |
 |---|---|---|
-| `history` | `list[tuple[int, float]]` | `(step, train_loss)` at each `log_every` — **master rank only**, empty elsewhere |
+| `history` | `list[tuple[int, float]]` | `(step, train_loss)` at each `log_every`; **master rank only**, empty elsewhere |
 | `final_val_loss` | `float` | Last validation loss; `nan` if none ran |
-| `step` | `int` | `train_cfg.total_steps` — the configured total, **not** steps executed |
+| `step` | `int` | `train_cfg.total_steps`, the configured total, **not** steps executed |
 
 **Raises:** `AssertionError` if `batch_tokens % (world × micro_batch_size ×
 seq_len) != 0`; `FileNotFoundError` if `resume=True` and no checkpoint exists.
@@ -125,18 +125,18 @@ initializes W&B; under DDP, calls `init_process_group` and `destroy_process_grou
 
 Behavior worth knowing as a caller:
 
-- **DDP activates on the `RANK` environment variable** — `ddp = "RANK" in
+- **DDP activates on the `RANK` environment variable**: `ddp = "RANK" in
   os.environ`, which `torchrun` sets. There is no flag. Single-GPU is the
   degenerate `world = 1` case of the same code path.
 - **`grad_accum` is derived**, never configured: `batch_tokens // (world ×
   micro_batch_size × seq_len)`.
-- **`torch.compile` is silently conditional** — `tc.compile and
+- **`torch.compile` is silently conditional**: `tc.compile and
   device.startswith("cuda")`. Off CUDA it prints `torch.compile disabled: not on
   CUDA` and continues.
 - **The seed is per-rank** (`torch.manual_seed(tc.seed + rank)`), while data draws
   are seeded by `(seed, rank, step, micro)` so ranks read disjoint crops.
 - **`log.csv` is opened in append mode** (`"a"`) and only gets a header if the file
-  is new — so a resumed run continues one CSV, and a **reused `out_dir` silently
+  is new, so a resumed run continues one CSV, and a **reused `out_dir` silently
   concatenates two runs' curves**.
 
 ```python
@@ -188,7 +188,7 @@ Three sharp edges:
   reference, and `tc.total_steps = args.steps` writes through to the module-level
   dict. Harmless for a CLI process; a trap if you import `main` into a longer-lived
   one.
-- **`if args.steps:` means `--steps 0` is ignored** — `0` is falsy, so it is
+- **`if args.steps:` means `--steps 0` is ignored**: `0` is falsy, so it is
   indistinguishable from "not passed". Same for `--data-dir ""`.
 
 ```bash
@@ -196,7 +196,7 @@ Three sharp edges:
 uv run python -m tinyllm.train --config d26 \
     --tokenizer tokenizer/tokenizer.json --resume
 
-# 8 GPUs — identical math, ~1/8 the wall clock
+# 8 GPUs: identical math, ~1/8 the wall clock
 uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
     --config d26 --tokenizer tokenizer/tokenizer.json
 
@@ -209,11 +209,11 @@ uv run python -m tinyllm.train --config smoke --device cpu --steps 20
 ### `log.csv`
 
 Written to `{out_dir}/log.csv` by the master rank, flushed on every write. The
-header is now `step,split,loss,lr_scale,tok_per_sec,mfu` — the `mfu` column was
+header is now `step,split,loss,lr_scale,tok_per_sec,mfu`; the `mfu` column was
 added alongside the inline MFU computation above, written as an empty string
 whenever it is not computable (anything off CUDA, or a GPU not in
 `PEAK_FLOPS`). The real first rows of the [recorded smoke
-run](/docs/runbooks/local-smoke)'s `out/smoke/log.csv` predate that column —
+run](/docs/runbooks/local-smoke)'s `out/smoke/log.csv` predate that column:
 they were captured against the old 5-column header, on MPS where `mfu` would
 have been empty regardless:
 
@@ -234,7 +234,7 @@ of the same number.
   **Ignore the first row's `tok_per_sec`.** `tok_s = tc.batch_tokens *
   tc.log_every / max(now - t_last, 1e-9)` always credits **`log_every` steps'
   worth of tokens** to the elapsed time, but at step 0 only *one* step has run
-  since `t_last` was set — so the figure is inflated roughly `log_every`× and
+  since `t_last` was set, so the figure is inflated roughly `log_every`× and
   `61272` above is an artifact, not throughput. The steady-state rate is the
   ~13,100 tok/s from step 10 onward. The same distortion applies to the first log
   line after any resume.
@@ -242,7 +242,7 @@ of the same number.
 
 ### `ckpt_last.pt`
 
-Written atomically (`tmp` + `os.replace`) — a crash mid-write leaves the previous
+Written atomically (`tmp` + `os.replace`): a crash mid-write leaves the previous
 checkpoint intact:
 
 ```python
@@ -259,9 +259,9 @@ torch.save(
 os.replace(tmp, path)
 ```
 
-`optimizers` is what makes resume seamless — Muon's momentum buffers and AdamW's
+`optimizers` is what makes resume seamless: Muon's momentum buffers and AdamW's
 moments ride along, so the loss continues rather than spiking. `model_cfg` is what
 lets [`load_model`](/docs/api/sample-and-eval#load_model) rebuild the architecture
-without being told it. Note `"step"` is saved as `step + 1` — the **next** step to
+without being told it. Note `"step"` is saved as `step + 1`, the **next** step to
 run, so a resume does not redo the last one. ~3.8 GiB for `d26`. See
 [Checkpointing](/docs/training/checkpointing).

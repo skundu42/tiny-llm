@@ -3,8 +3,8 @@ title: Format and the fast path
 description: The JSON on-disk format, the byte-to-unicode table, and the byte-identical Hugging Face export
 ---
 
-A trained tokenizer has to be saved, reloaded, and — because encoding a
-billion-token corpus in pure Python is slow — optionally handed to a fast Rust
+A trained tokenizer has to be saved, reloaded, and (because encoding a
+billion-token corpus in pure Python is slow) optionally handed to a fast Rust
 engine for bulk work. This page covers the on-disk format, the byte-to-unicode
 table that makes the fast-engine handoff possible, and the parity contract that
 keeps the pure-Python encoder as the single source of truth.
@@ -27,20 +27,20 @@ def save(self, path: str) -> None:
 
 Four fields, and only two of them carry real information:
 
-- **`version`** — a schema version, so the loader can evolve.
-- **`pattern`** — the exact pre-tokenization regex the merges were trained
+- **`version`**: a schema version, so the loader can evolve.
+- **`pattern`**: the exact pre-tokenization regex the merges were trained
   against. `load` checks it against today's `SPLIT_PATTERN` and raises
-  `ValueError` on a mismatch (see below) — so a tokenizer saved under a
+  `ValueError` on a mismatch (see below), so a tokenizer saved under a
   different pattern fails loudly at load time instead of silently mis-encoding
   every input under the wrong split.
-- **`merges`** — the ordered list of merges, each a `[a, b]` pair of **integer
+- **`merges`**: the ordered list of merges, each a `[a, b]` pair of **integer
   ids**. This is the entire learned model. Note what is *not* stored: the
   expanded byte strings of each token. Because token `256 + i` is by definition
   the concatenation of the tokens named in merge `i`, the whole vocab is
   reconstructed deterministically from the merge list alone. Storing integer id
   pairs instead of strings keeps the file compact and completely free of any
   text-encoding ambiguity.
-- **`special_tokens`** — the mapping `{"<|endoftext|>": id}`.
+- **`special_tokens`**: the mapping `{"<|endoftext|>": id}`.
 
 Loading is the mirror image, and rebuilding the vocab from merges happens in
 `_build`:
@@ -64,13 +64,13 @@ The constructor calls `_build`, which reconstructs `merge_ranks`, the full
 `vocab` (bytes `0`–`255` plus one entry per merge), and the reverse
 special-token map. Nothing else needs to be persisted.
 
-The pattern check only fires when `"pattern"` is present and differs — a file
+The pattern check only fires when `"pattern"` is present and differs: a file
 saved without the field (or with it `null`) loads unchanged, so old saved
 tokenizers are not broken retroactively. This closes what was previously a
 silent-corruption trap: `pattern` was written on save but never read back, so
 a tokenizer saved under a since-changed `SPLIT_PATTERN` would reload
 "successfully" and mis-encode every input against merges trained on a
-different split — wrong, but with no error to signal it.
+different split: wrong, but with no error to signal it.
 
 ## Decoding is always lossless
 
@@ -96,7 +96,7 @@ a multi-byte character split across two tokens still reassembles correctly. The
 
 ## The byte-to-unicode table
 
-The JSON format above never needs it — but the moment you want to talk to
+The JSON format above never needs it, but the moment you want to talk to
 Hugging Face `tokenizers`, you do. That library represents BPE tokens as
 **strings**, and a token's bytes can include control characters, raw spaces, and
 newlines that are unsafe or invisible in a string-keyed JSON vocab. GPT-2's
@@ -122,12 +122,12 @@ def _bytes_to_unicode() -> dict[int, str]:
     return dict(zip(bs, (chr(c) for c in cs)))
 ```
 
-The bytes that are *already* printable — `!` through `~`, `¡` through `¬`, `®`
-through `ÿ` — map to themselves. The remaining bytes (control codes, space,
+The bytes that are *already* printable (`!` through `~`, `¡` through `¬`, `®`
+through `ÿ`) map to themselves. The remaining bytes (control codes, space,
 delete, and a couple of gaps) have no safe printable form, so they are shifted
 up to fresh codepoints starting at `256`. The result is a bijection: 256 bytes
 to 256 unique printable characters, fully reversible. A space (byte `32`), for
-instance, is displayed as `Ġ` — the leading-`Ġ` tokens you see in GPT-2-family
+instance, is displayed as `Ġ`; the leading-`Ġ` tokens you see in GPT-2-family
 vocabularies are just spaces under this relabeling.
 
 ## The fast path: exporting to Hugging Face
@@ -168,7 +168,7 @@ Every piece is chosen to reproduce the Python behavior exactly:
 - **The pre-tokenizer is a `Sequence` of two stages.** First `Split` with the
   *same* `SPLIT_PATTERN` and `behavior="isolated"`, so the text is chopped into
   the identical pre-tokens. This is exactly why the pattern had to drop
-  possessive quantifiers — the Rust regex engine would reject them, and it must
+  possessive quantifiers: the Rust regex engine would reject them, and it must
   swallow the pattern verbatim. Second, `ByteLevel(add_prefix_space=False,
   use_regex=False)` maps the pre-token bytes into the byte-to-unicode alphabet
   the vocab is keyed on. `use_regex=False` is critical: the `ByteLevel` stage
@@ -191,8 +191,8 @@ def verify_fast(self, fast, texts: Iterable[str]) -> None:
             raise ValueError(f"fast tokenizer mismatch on: {t[:80]!r}")
 ```
 
-`verify_fast` demands **byte-identical** id sequences — not "close," not "same
-length," exactly equal — on a sample of real text, and raises the instant any
+`verify_fast` demands **byte-identical** id sequences (not "close," not "same
+length," exactly equal) on a sample of real text, and raises the instant any
 document disagrees. The data-prep pipeline wires this contract in before it
 trusts the fast path: it exports, verifies on a sample, prints a confirmation,
 and only then batch-encodes the corpus with the fast engine:
@@ -204,7 +204,7 @@ tok.verify_fast(fast, sample)
 print("fast tokenizer verified token-identical on 200 docs")
 ```
 
-If the two engines ever diverged — a regex-dialect quirk, a byte-mapping bug —
+If the two engines ever diverged (a regex-dialect quirk, a byte-mapping bug),
 `verify_fast` would fail loudly at prep time rather than silently poisoning tens
 of billions of training tokens. The speed of Rust, with the correctness of the
 implementation you can read end to end.

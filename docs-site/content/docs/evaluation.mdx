@@ -4,9 +4,9 @@ description: The validation-loss protocol and its fixed seeded batches, HellaSwa
 ---
 
 Two numbers say whether the run is working, and they say different things.
-**Validation loss** is continuous, in-distribution, and available every 250 steps
-— it is the number you watch. **HellaSwag** is discrete, downstream, and run
-after the fact — it is the number that says the model learned something a human
+**Validation loss** is continuous, in-distribution, and available every 250 steps;
+it is the number you watch. **HellaSwag** is discrete, downstream, and run
+after the fact; it is the number that says the model learned something a human
 would call knowledge. Both are implemented in this repo without a harness:
 validation lives inside `tinyllm/train.py`, HellaSwag in
 `tinyllm/eval_hellaswag.py`.
@@ -32,7 +32,7 @@ def eval_val() -> float:
     return sum(losses) / len(losses)
 ```
 
-- **The batches are fixed.** The seed is `[tc.seed, 999, k]` — it depends on the
+- **The batches are fixed.** The seed is `[tc.seed, 999, k]`: it depends on the
   batch index `k` and nothing else. Not the step, not the rank, not the wall
   clock. Every single evaluation, at every step, in every run with the same
   `seed`, scores **the exact same crops of the validation split**. This is the
@@ -42,22 +42,22 @@ def eval_val() -> float:
   would be unreadable. The `999` is just a namespace constant keeping these draws
   disjoint from the training stream's `[seed, rank, step, micro]`.
 - **`model.eval()` / `model.train()` bracket the call.** `tinyllm` has no dropout
-  and no batchnorm, so this changes no math today — it is the correct habit, and
+  and no batchnorm, so this changes no math today; it is the correct habit, and
   it is what makes adding a stochastic layer later safe rather than silently
   wrong.
-- **`@torch.no_grad()`** — no graph is built, so validation costs activation
+- **`@torch.no_grad()`**: no graph is built, so validation costs activation
   memory but no gradient memory.
 - **The same autocast `ctx` as training.** Validation is measured in the same
   precision the model trains in, so the number is comparable to `loss_accum`
   rather than to a slightly different fp32 model.
 - **The result is a plain mean over `val_batches` micro-batch losses.** Each
-  `loss` is already a mean over its own tokens, so this is a mean-of-means — it
+  `loss` is already a mean over its own tokens, so this is a mean-of-means; it
   is exactly a token-weighted mean only because every micro-batch has the same
   token count, which it does.
 
 ### How much data, and how often
 
-`val_every` fires on `(step + 1) % tc.val_every == 0` — so with `d26`'s
+`val_every` fires on `(step + 1) % tc.val_every == 0`, so with `d26`'s
 `val_every = 250` the evals land at steps 249, 499, 749, …, and with `smoke`'s
 `val_every = 100` they land at 99, 199, 299, … which is exactly where the
 [recorded smoke numbers](/docs/runbooks/local-smoke) sit. It also fires
@@ -71,7 +71,7 @@ regardless of where the cadence landed.
 
 Note what this is **not**: it is not a full pass over the validation split.
 `d26`'s val split is ~10M tokens and each eval reads 328k of them, as 20 random
-crops drawn with replacement. It is a fixed *sample*, not an exhaustive sweep —
+crops drawn with replacement. It is a fixed *sample*, not an exhaustive sweep:
 cheap enough to run 76 times over a 19,073-step run without denting throughput,
 and because the sample is frozen by the seed, its bias is a constant offset that
 cancels out of every comparison you actually care about (step 249 vs step 19,072).
@@ -97,7 +97,7 @@ random-init loss = ln(vocab_size) = ln(32768) = 10.3972
 
 Perplexity is the effective number of tokens the model is choosing between at
 each position. A model that has learned nothing spreads probability uniformly
-over the vocabulary and scores `ln(32768) = 10.3972` nats — perplexity 32,768,
+over the vocabulary and scores `ln(32768) = 10.3972` nats: perplexity 32,768,
 the vocab size itself. That identity is the single best smoke test in the
 project: the [recorded run](/docs/runbooks/local-smoke) opens at **10.4399**,
 0.04 nats above the uniform baseline, which proves the
@@ -107,13 +107,13 @@ they belong. It is asserted in the test suite as
 
 | Val loss (nats) | Perplexity | What it means |
 |---|---|---|
-| 10.40 | 32,768 | Untrained — uniform over the vocab |
+| 10.40 | 32,768 | Untrained: uniform over the vocab |
 | 5.50 | ~245 | The `smoke` run's final loss: English morphology and syntax, no facts |
 | 3.0 | ~20 | Lower end of the `d26` expectation |
 | 2.7 | ~15 | Upper end of the `d26` expectation |
 
 **Expect `d26` to land at a val loss of roughly 2.7-3.0** after 19,073 steps over
-~10B tokens. The window is wide on purpose — the exact figure moves with the
+~10B tokens. The window is wide on purpose: the exact figure moves with the
 data mix and the tokenizer, and a val loss is only comparable against runs that
 share both. A loss computed on a 32,768-token vocab is **not** comparable to one
 published against a 50,257-token GPT-2 vocab; more vocab means more choices per
@@ -121,7 +121,7 @@ token and a mechanically higher cross-entropy. Compare `d26` against `d26`.
 
 The shape matters more than the value. What you want to see is val tracking train
 downward with no divergence between them. In the smoke run val ends at 5.5012
-just *below* train's 5.5300 — no overfitting, which is exactly right for a run
+just *below* train's 5.5300: no overfitting, which is exactly right for a run
 that consumes 9.8M tokens out of a 58M-token split and never sees an example
 twice.
 
@@ -132,7 +132,7 @@ up a violin is more likely to play it than to eat it. HellaSwag can. Each exampl
 is a context plus **four candidate endings**, one of which is the true
 continuation and three of which are adversarially-generated distractors that are
 grammatical and topical but wrong. The model never sees the labels and is never
-trained on the task — it is scored purely on which ending it finds most likely.
+trained on the task; it is scored purely on which ending it finds most likely.
 
 This is the standard way to evaluate a base model: no prompt engineering, no
 instruction following, no generation at all. Just likelihood.
@@ -169,9 +169,9 @@ Four endings, four forward passes, each on the concatenation `ctx + ending`.
   them are `j = C-1 … C+E-2`, and `losses[len(ctx_ids) - 1:]` is exactly those
   `E` terms. **The context's own tokens contribute nothing to the score.** They
   must not: every candidate shares the same context, so including it would add an
-  identical constant to all four — harmless for `acc`, but it would wreck
+  identical constant to all four: harmless for `acc`, but it would wreck
   `acc_norm`, where the four scores are divided by four *different* lengths.
-  Note the first scored position, `C-1`, is the last *context* token — it is the
+  Note the first scored position, `C-1`, is the last *context* token: it is the
   position whose prediction is the ending's first token. An off-by-one here
   silently scores the wrong span.
 - **Two reductions, returned together.** `tail.sum()` and `tail.mean()` are the
@@ -197,25 +197,25 @@ acc += int(min(range(4), key=lambda i: losses[i][0]) == label)
 acc_norm += int(min(range(4), key=lambda i: losses[i][1]) == label)
 ```
 
-Both metrics are argmin over the four endings — lowest loss wins, since low loss
+Both metrics are argmin over the four endings: lowest loss wins, since low loss
 is high likelihood. They differ only in *which* of the two reductions they argmin
 over:
 
-- **`acc`** picks the ending with the lowest **summed** loss — the most probable
+- **`acc`** picks the ending with the lowest **summed** loss: the most probable
   ending, full stop.
-- **`acc_norm`** picks the lowest **mean** loss — the most probable ending *per
+- **`acc_norm`** picks the lowest **mean** loss: the most probable ending *per
   token*.
 
 **Why normalize?** Because `sum` is biased toward short endings, and the bias is
 structural rather than incidental. Every token contributes a strictly positive
-surprisal — `−log P` of a probability below 1 — so a longer ending accumulates a
+surprisal (`−log P` of a probability below 1), so a longer ending accumulates a
 larger total *no matter how good it is*. An 8-token ending at a comfortable 3.0
 nats/token scores 24.0; a 4-token ending at a mediocre 5.0 nats/token scores
 20.0, and wins. The model has not judged the short ending more plausible; it has
 just had fewer chances to pay. Since HellaSwag's four candidates are natural
 language of genuinely differing lengths, `acc` systematically rewards the short
-one, and at small scale — where the model's per-token opinions are weak and
-length dominates — that bias can be most of the signal.
+one, and at small scale, where the model's per-token opinions are weak and
+length dominates, that bias can be most of the signal.
 
 `acc_norm` divides it out, which is why **`acc_norm` is the metric to quote** and
 why it is usually the higher of the two for a base model. `acc` is kept because
@@ -252,15 +252,15 @@ for ex in ds:
         print(f"{n}: acc {acc / n:.4f} | acc_norm {acc_norm / n:.4f}")
 ```
 
-- **The validation split**, streamed — HellaSwag's test labels are not public, so
+- **The validation split**, streamed: HellaSwag's test labels are not public, so
   validation is the split everyone reports.
-- **`tok.encode(" " + e)`** — the leading space is deliberate and load-bearing.
+- **`tok.encode(" " + e)`**: the leading space is deliberate and load-bearing.
   Our [pre-tokenizer](/docs/tokenizer/training) binds a space to the word that
   follows it (` ?[^\s\p{L}\p{N}]+`, `[^\r\n\p{L}\p{N}]?\p{L}+`), so ` play` is a
   different token from `play`. The ending genuinely follows the context with a
   space in between, and encoding it without one would score a token sequence that
   never occurs in natural text.
-- **Over-length examples are skipped, not truncated** — and `n` is not
+- **Over-length examples are skipped, not truncated**, and `n` is not
   incremented for them, so the denominator counts only what was actually scored.
   Truncating the context would change the task; dropping the example is honest.
   At `seq_len = 2048` against HellaSwag's short contexts this effectively never
@@ -268,7 +268,7 @@ for ex in ds:
 - **`--limit` defaults to 1000** of the ~10k validation examples. Four forwards
   per example makes this the cost knob. 1,000 examples gives a standard error of
   roughly `√(0.3 × 0.7 / 1000) ≈ 1.4%`, so differences under ~3 points are
-  noise — raise `--limit` before believing a small delta.
+  noise; raise `--limit` before believing a small delta.
 
 ### Running it
 
@@ -281,10 +281,10 @@ uv run python -m tinyllm.eval_hellaswag \
 
 `--device` is optional and auto-selects `cuda` → `mps` → `cpu`. Output is a
 progress line every 100 examples and a final summary. **No `d26` run has been
-executed — the line below illustrates the format, not a measurement:**
+executed; the line below illustrates the format, not a measurement:**
 
 ```
-# illustrative format — no d26 run exists yet; these are not measured values
+# illustrative format: no d26 run exists yet; these are not measured values
 final (1000 examples): acc 0.2880 | acc_norm 0.3240
 ```
 
@@ -299,12 +299,12 @@ final (1000 examples): acc 0.2880 | acc_norm 0.3240
 **Four choices means chance is 0.25, and that is the number to beat.** A `d26`
 run landing at **0.30-0.35** is a success. That gap over chance looks small next
 to a frontier model's 0.85+, and it is exactly what 489M parameters on 10B tokens
-buys — HellaSwag was built to be adversarially hard for models of roughly this
+buys. HellaSwag was built to be adversarially hard for models of roughly this
 generation, and clearing chance by 5-10 points means the model has real, if thin,
 commonsense preference. It is not a rounding error: at 1,000 examples, 0.32 vs
 0.25 is ~5 standard errors.
 
-Anything at or below **0.26** after a full run means something is broken — most
+Anything at or below **0.26** after a full run means something is broken, most
 likely a tokenizer/checkpoint mismatch (an eval run with a different
 `tokenizer.json` than the model trained on scores exactly chance, because the
 token ids are meaningless to the model). Check that first.
@@ -312,4 +312,4 @@ token ids are meaningless to the model). Check that first.
 And a caution worth stating plainly: **HellaSwag is not sensitive at this scale.**
 Between 0.30 and 0.33 you are reading noise as much as capability. Use val loss
 to steer the run and HellaSwag as an end-of-run check that the loss corresponds
-to something outside the training distribution — not as a hill to climb.
+to something outside the training distribution, not as a hill to climb.

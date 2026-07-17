@@ -52,29 +52,29 @@ Three structural decisions are visible before any sampling happens:
 
 - **The length is checked up front.** `assert total <= self.cfg.seq_len` fails
   *before* a single token is generated. Prompt plus new tokens must fit the
-  context — there is no sliding window, no rolling eviction, no truncation. At
+  context: there is no sliding window, no rolling eviction, no truncation. At
   `d26`'s `seq_len = 2048`, a 1,900-token prompt leaves you 148 tokens. The assert
   is the honest version of a limit that exists either way: the
   [RoPE tables](/docs/architecture/rope) are precomputed to exactly `seq_len`
   rows, so position 2048 has no rotation to apply.
-- **The cache is allocated once, for exactly `total`.** Not `seq_len` — `T +
+- **The cache is allocated once, for exactly `total`.** Not `seq_len`: `T +
   max_new_tokens`. Generating 50 tokens from a 10-token prompt allocates a
   60-position cache, not a 2048-position one. Preallocating the true bound means
   no reallocation and no `torch.cat` in the hot loop.
-- **The cache dtype is `self.embed.weight.dtype`** — it follows the model's own
+- **The cache dtype is `self.embed.weight.dtype`**: it follows the model's own
   precision rather than being hardcoded. This has a real consequence covered
   [below](#a-note-on-dtype).
 
 ## The prefill/decode contract
 
 The loop runs the model in exactly two modes, and the split is not an
-optimization detail — it is a correctness contract the code asserts.
+optimization detail; it is a correctness contract the code asserts.
 
-**Prefill.** `logits, _ = self(idx, cache=cache)` — one forward over the entire
+**Prefill.** `logits, _ = self(idx, cache=cache)`: one forward over the entire
 prompt, from an empty cache (`pos == 0`). All `T` prompt positions are computed
 in parallel, their keys and values written to the cache, causally masked.
 
-**Decode.** `logits, _ = self(next_tok, cache=cache)` — one forward per token,
+**Decode.** `logits, _ = self(next_tok, cache=cache)`: one forward per token,
 `T == 1`, appending to a non-empty cache.
 
 `Attention.forward` permits those two cases and nothing else:
@@ -100,18 +100,18 @@ y = F.scaled_dot_product_attention(q, k, v, is_causal=q.size(2) == k.size(2))
 
 | Case | `q_len` | `k_len` | `is_causal` | Correct? |
 |---|---|---|---|---|
-| Prefill from empty | `T` | `T` | `True` | Yes — triangular mask applied |
-| Decode one token | `1` | `pos + 1` | `False` | Yes — the one query is newest; all cached keys are its past |
-| **Chunked prefill** | `5` | `105` | **`False`** | **No — silent corruption** |
+| Prefill from empty | `T` | `T` | `True` | Yes: triangular mask applied |
+| Decode one token | `1` | `pos + 1` | `False` | Yes: the one query is newest; all cached keys are its past |
+| **Chunked prefill** | `5` | `105` | **`False`** | **No: silent corruption** |
 
-In that third row — feeding 5 new tokens against 100 cached ones — `q_len !=
+In that third row (feeding 5 new tokens against 100 cached ones), `q_len !=
 k_len`, so `is_causal` is `False` and **no mask is applied at all**. The 5 queries
 would attend to each other bidirectionally: chunk token 1 would see chunk tokens
 2-5, which are its future. Nothing would crash. The logits would just be wrong,
 computed from information the model cannot have at inference time.
 
-Supporting it properly needs a block-diagonal mask — causal within the chunk,
-fully visible over the cached prefix — which SDPA will not derive for you.
+Supporting it properly needs a block-diagonal mask (causal within the chunk,
+fully visible over the cached prefix), which SDPA will not derive for you.
 Rather than build that, the code refuses the case loudly and documents the
 refusal in `KVCache`'s own docstring:
 
@@ -127,7 +127,7 @@ class KVCache:
 
 **This is a real limitation, and it has real costs.** You cannot prefill a long
 prompt in memory-bounded chunks, and you cannot extend a cached conversation with
-a multi-token user turn in one pass — you must decode it token by token, at
+a multi-token user turn in one pass; you must decode it token by token, at
 1/`n` the throughput. Both are things a production server needs. The trade made
 here is explicit: the two supported patterns are *provably* correct and cover
 everything `generate` does, and a wrong mask is a bug that produces
@@ -148,12 +148,12 @@ def advance(self, t: int) -> None:
 ```
 
 `update` writes into the preallocated slice at `pos` and returns a **view** of
-everything up to `pos + t` — no copy, no concatenation, no growth. Note the keys
+everything up to `pos + t`: no copy, no concatenation, no growth. Note the keys
 are cached **after** RoPE and QK-norm, in their final rotated form; a key's
 rotation depends only on its own absolute position, so it is valid forever.
 
 `advance` is called once per forward by `TinyLLM.forward`, after every block has
-written — not once per layer, since all 26 layers share one position counter:
+written, not once per layer, since all 26 layers share one position counter:
 
 ```python
 def forward(self, idx, targets=None, cache: KVCache | None = None):
@@ -170,7 +170,7 @@ def forward(self, idx, targets=None, cache: KVCache | None = None):
 
 `pos0` is where RoPE picks up: the cache's position *is* the absolute position of
 the incoming token, so the decode step at `pos == 41` slices `rope_cos[41:42]`.
-This is the coupling that makes the cache correct — and the reason `advance` must
+This is the coupling that makes the cache correct, and the reason `advance` must
 come after the blocks, never before.
 
 ### The prefill logits shortcut
@@ -184,14 +184,14 @@ return self.lm_head(x), None
 ```
 
 When a cache is in play, **only the last position's logits are computed**.
-`lm_head` is the single widest matmul in the model — `d_model × vocab_size =
-1280 × 32,768 = 41.9M` parameters — and during prefill you need exactly one row
+`lm_head` is the single widest matmul in the model (`d_model × vocab_size =
+1280 × 32,768 = 41.9M` parameters), and during prefill you need exactly one row
 of its output: the distribution for the token that follows the prompt. Projecting
 all `T` prompt positions to vocab would cost `T×` as much for output that is
 thrown away. On a 1,000-token prompt this alone is the difference between one
 41.9M-parameter matmul and a thousand of them.
 
-(The `targets is not None` branch above it returns full logits — training needs a
+(The `targets is not None` branch above it returns full logits: training needs a
 prediction at every position.)
 
 ## KV-cache memory
@@ -203,7 +203,7 @@ arithmetic rather than an estimate:
 bytes = 2 (K and V) × n_layer × batch × n_kv_head × seq_len × head_dim × bytes_per_element
 ```
 
-For `d26` — `n_layer = 26`, `n_kv_head = 4`, `head_dim = 64` — at full context in
+For `d26` (`n_layer = 26`, `n_kv_head = 4`, `head_dim = 64`) at full context in
 bf16, batch 1:
 
 ```
@@ -218,7 +218,7 @@ the same formula gives:
 2 × 26 × 1 × 20 × 2048 × 64 × 2 = 272,629,760 bytes = 260 MiB
 ```
 
-**Exactly 5× larger** — the ratio `20/4`, since every other term is unchanged.
+**Exactly 5× larger**: the ratio `20/4`, since every other term is unchanged.
 
 | Configuration | Batch 1 | Batch 32 |
 |---|---|---|
@@ -227,11 +227,11 @@ the same formula gives:
 | `smoke` (6 layers, 2 KV heads, ctx 512) | 1.5 MiB | 48 MiB |
 
 Every term is linear, which is what makes the cache the binding constraint on a
-serving box. The **weights are a fixed cost** — 489,297,408 params × 2 bytes =
+serving box. The **weights are a fixed cost**: 489,297,408 params × 2 bytes =
 933 MiB in bf16 for `d26`, loaded once, shared by every sequence. **The cache is
 per sequence.** At batch 32 and full context the GQA cache is 1.63 GiB against
 933 MiB of weights; the 20-KV-head cache would be 8.13 GiB, several times the
-model itself, and it — not the parameters — would decide how many users fit on
+model itself, and it, not the parameters, would decide how many users fit on
 the card.
 
 It is also a *speed* argument. Decoding one token is memory-bandwidth-bound, not
@@ -242,7 +242,7 @@ cache means 5× less traffic per token, on the exact critical path.
 ### A note on dtype
 
 The formula's last factor is `self.embed.weight.dtype`, not an assumption. **The
-52 MiB figure is the bf16 number** — and `tinyllm.sample` does not give you bf16:
+52 MiB figure is the bf16 number**, and `tinyllm.sample` does not give you bf16:
 
 ```python
 def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
@@ -256,7 +256,7 @@ def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
 
 `TinyLLM(cfg)` constructs in PyTorch's default fp32 and the checkpoint's fp32
 master weights load straight into it. So sampling from a checkpoint as shipped
-runs the model **and its cache** in fp32 — **104 MiB at full context, not 52**,
+runs the model **and its cache** in fp32: **104 MiB at full context, not 52**,
 and 1.82 GiB of weights rather than 933 MiB. That is fine for the interactive,
 batch-1 use
 `tinyllm.sample` is for. If you are serving, cast the model (`model.bfloat16()`)
@@ -266,7 +266,7 @@ the embedding rather than hardcoded.
 ## Sampling
 
 Everything after the forward is turning one logit vector into one token id. The
-knobs apply in a fixed order — **temperature → top-k → top-p → sample** — and
+knobs apply in a fixed order (**temperature → top-k → top-p → sample**), and
 the order is why they compose the way they do.
 
 ### Greedy: `temperature=0`
@@ -278,8 +278,8 @@ if temperature == 0.0:
 
 Special-cased first, and it must be: `temperature` is a divisor, so 0.0 would be
 a division by zero producing `inf`/`nan` rather than the sharp distribution the
-limit implies. `argmax` **is** that limit — as `temperature → 0` the softmax
-concentrates entirely on the highest logit — so the branch is mathematically the
+limit implies. `argmax` **is** that limit (as `temperature → 0` the softmax
+concentrates entirely on the highest logit), so the branch is mathematically the
 right answer, not a fallback.
 
 Greedy decoding is deterministic: same prompt, same checkpoint, same output,
@@ -296,18 +296,18 @@ logits_last = logits_last / temperature
 
 Dividing the logits before the softmax rescales the distribution's sharpness:
 
-- **`temperature < 1`** — logits spread apart, softmax sharpens, probability
+- **`temperature < 1`**: logits spread apart, softmax sharpens, probability
   concentrates on the top tokens. More conservative, more repetitive.
-- **`temperature = 1`** — the model's own distribution, untouched.
-- **`temperature > 1`** — logits compress toward each other, the distribution
+- **`temperature = 1`**: the model's own distribution, untouched.
+- **`temperature > 1`**: logits compress toward each other, the distribution
   flattens, unlikely tokens get real mass. More diverse, more incoherent.
 
-The default in `tinyllm.sample` is **0.8**, mildly sharpened — the usual choice
+The default in `tinyllm.sample` is **0.8**, mildly sharpened, the usual choice
 for a base model, where the raw distribution is diffuse enough that `1.0` wanders.
 
 A consequence of the ordering worth knowing: because dividing by a positive
 temperature is **monotonic**, it does not change the logits' *ranking*. So
-**top-k selects the same k tokens at any temperature** — temperature only changes
+**top-k selects the same k tokens at any temperature**: temperature only changes
 how mass is distributed among them. **Top-p is not invariant**, because it
 thresholds cumulative *probability*: raising the temperature flattens the
 distribution, so more tokens are needed to reach `p`, and the nucleus grows. The
@@ -322,14 +322,14 @@ if top_k is not None:
 ```
 
 Keep the `k` highest-probability tokens, kill the rest. `torch.topk(...).values[:,
--1:]` is the **k-th largest logit** — the threshold — and everything strictly
+-1:]` is the **k-th largest logit** (the threshold), and everything strictly
 below it is set to `-inf`, which softmax maps to exactly zero probability. The
 surviving mass is renormalized automatically by the softmax that follows.
 
 The `min(top_k, logits_last.size(-1))` guard keeps `topk` from raising when `k`
 exceeds the vocabulary. And note the comparison is `<`, strictly: tokens *tied*
 with the k-th logit all survive, so an exact tie can leave more than `k`
-candidates. Harmless with real-valued logits, and correct — arbitrarily breaking
+candidates. Harmless with real-valued logits, and correct: arbitrarily breaking
 a tie would be worse.
 
 Top-k's weakness is that `k` is fixed while the model's confidence is not. At a
@@ -351,17 +351,17 @@ if top_p is not None:
 ```
 
 Top-p fixes exactly that weakness: instead of a fixed count, keep the smallest set
-of tokens whose cumulative probability reaches `p`. The nucleus **adapts** — a
+of tokens whose cumulative probability reaches `p`. The nucleus **adapts**: a
 confident position keeps 2 tokens, an ambiguous one keeps 200.
 
 The subtle line is `probs.cumsum(-1) - probs > top_p`. Subtracting `probs` from
-its own cumulative sum yields the **exclusive** prefix sum — the mass strictly
+its own cumulative sum yields the **exclusive** prefix sum: the mass strictly
 *before* each token. So a token is dropped only when the mass ahead of it already
 exceeds `p`, which means **the token that crosses the threshold is kept, and the
 top-1 token is always kept** (its exclusive prefix is 0, and `0 > p` is false for
 any `p > 0`). An inclusive `cumsum(-1) > top_p` would drop the crossing token,
 and with a `p` smaller than the top token's own probability it would mask
-*everything* — `-inf` across the vocab, `nan` out of the softmax, and
+*everything*: `-inf` across the vocab, `nan` out of the softmax, and
 `multinomial` throwing. This one-term shift is the difference between a working
 sampler and a crash on `top_p=0.5` at a confident position.
 
@@ -370,7 +370,7 @@ computed in sorted order and `multinomial` needs vocab-indexed input.
 
 **Top-p runs after top-k**, on already-truncated logits, so its softmax is over
 the surviving `k` and its nucleus is a subset of them. Passing both means "at most
-`k`, and within that, the `p`-nucleus" — the intersection, and the stricter of the
+`k`, and within that, the `p`-nucleus": the intersection, and the stricter of the
 two wins. `tinyllm.sample` defaults `top_p` to `None` (off), `top_k` to 50.
 
 ### The draw, and stopping
@@ -386,16 +386,16 @@ logits, _ = self(next_tok, cache=cache)
 One softmax over the surviving logits, one categorical draw. Note the order at the
 bottom: the token is **appended before the break check**, so an emitted `eos` is
 included in the returned sequence, and the break happens **before** the next
-forward — no wasted compute on a token nobody will read.
+forward: no wasted compute on a token nobody will read.
 
 <Callout type="warn">
   **`.all()` is a batch limitation.** Generation stops only when *every* sequence
   in the batch emits `eos` on the same step. With `B > 1`, a sequence that
-  finishes early keeps generating — its `eos` is in `idx`, but tokens continue to
+  finishes early keeps generating: its `eos` is in `idx`, but tokens continue to
   be appended after it, and those tokens are garbage conditioned on a finished
   document. There is no per-sequence finished mask and no padding. For batched
-  generation, truncate each row at its first `eos_id` yourself. At `B = 1` — what
-  `tinyllm.sample` does — `.all()` is just `.item()` and the behavior is exactly
+  generation, truncate each row at its first `eos_id` yourself. At `B = 1` (what
+  `tinyllm.sample` does), `.all()` is just `.item()` and the behavior is exactly
   what you want.
 </Callout>
 
@@ -418,7 +418,7 @@ uv run python -m tinyllm.sample \
 | Flag | Default | Meaning |
 |---|---|---|
 | `--ckpt` | *required* | Checkpoint path |
-| `--tokenizer` | *required* | `tokenizer.json` — **must be the one the model trained on** |
+| `--tokenizer` | *required* | `tokenizer.json`; **must be the one the model trained on** |
 | `--prompt` | `""` | Empty prompt = unconditional generation from `<\|endoftext\|>` alone |
 | `--max-new-tokens` | `200` | Tokens to generate |
 | `--temperature` | `0.8` | `0` = greedy |
@@ -444,7 +444,7 @@ model saw between every pair of documents during training
 "a document starts here." Beginning without it asks the model to continue a
 document whose start it never saw. It also makes an **empty prompt** well-defined:
 `idx` is `[[eot_id]]`, a legal length-1 sequence, and the model generates a
-document from nothing — which is exactly how the training loop's periodic samples
+document from nothing, which is exactly how the training loop's periodic samples
 work:
 
 ```python

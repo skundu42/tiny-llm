@@ -6,8 +6,8 @@ description: The word-count plus incremental pair-index algorithm, its complexit
 Training a BPE tokenizer means discovering, in order, the most useful byte
 merges from a corpus. The textbook algorithm is simple to state and painfully
 slow to run at scale. `tinyllm`'s trainer (`BPETokenizer.train`) keeps the exact
-same output but makes it tractable — 32,511 merges over roughly a gigabyte of
-text, in pure Python — with two ideas: **count unique words once**, and
+same output but makes it tractable (32,511 merges over roughly a gigabyte of
+text, in pure Python) with two ideas: **count unique words once**, and
 **maintain the pair counts incrementally** instead of rescanning.
 
 ## The naive algorithm and why it hurts
@@ -21,7 +21,7 @@ Classic BPE, done literally:
 
 The problem is step 2. Recounting all adjacent pairs across the entire corpus,
 once per merge, is `O(n_merges × corpus_length)`. With ~32k merges and a
-billion-token corpus that is tens of trillions of operations — a non-starter in
+billion-token corpus that is tens of trillions of operations, a non-starter in
 Python.
 
 `tinyllm` attacks both factors: it shrinks `corpus_length` down to the set of
@@ -93,7 +93,7 @@ for wi, w in enumerate(words):
 - **`pair_counts`** maps each adjacent id pair to its total frequency-weighted
   count across all words. This is the table we pick the winner from.
 - **`pair_to_words`** is an inverted index: for each pair, the set of word
-  indices that currently contain it. This is the key to never rescanning — when
+  indices that currently contain it. This is the key to never rescanning: when
   a pair wins, we only need to visit the handful of words that actually contain
   it.
 
@@ -136,7 +136,7 @@ contains it, first **subtract** that word's old pairs out of the global counts
 and drop it from their inverted-index sets, then **rewrite** the word by
 replacing every occurrence of the winning pair with the new id, then **add** the
 word's new pairs back into the counts and the index. The global `pair_counts`
-and `pair_to_words` end the step exactly as if we had recounted from scratch —
+and `pair_to_words` end the step exactly as if we had recounted from scratch,
 but we only ever touched words that contained the merged pair.
 
 ## Complexity
@@ -148,7 +148,7 @@ pairs at a given moment.
   This linear scan is the dominant per-step cost, and it is over the compact set
   of distinct pairs, not the corpus.
 - **Applying the merge** costs work proportional only to the total length of the
-  words that contained the winning pair — decrement, rewrite, re-increment. In
+  words that contained the winning pair: decrement, rewrite, re-increment. In
   aggregate over the whole run, each pair-occurrence is created and destroyed a
   bounded number of times, so applied-merge work is roughly linear in the total
   number of pair-occurrences ever present, independent of `n_merges`.
@@ -160,7 +160,7 @@ maintained state. That is the difference between "runs overnight in Python" and
 
 ## Determinism: how ties are broken
 
-Reproducibility matters — the same corpus must always yield the same tokenizer,
+Reproducibility matters: the same corpus must always yield the same tokenizer,
 regardless of hash-set iteration order or how many processes counted the words.
 That is guaranteed entirely by the sort key when choosing the winner:
 
@@ -212,7 +212,7 @@ def _encode_word_uncached(self, word: bytes) -> tuple[int, ...]:
 ```
 
 Any pair not in the rank table gets rank infinity and is never chosen, so
-encoding stops when no learned merge applies — leaving whatever bytes remain as
+encoding stops when no learned merge applies, leaving whatever bytes remain as
 individual tokens. Per-word results are memoized with an `lru_cache` of 65,536
 entries (`1 << 16`), so the Zipfian flood of common words is encoded once and
 served from cache thereafter.

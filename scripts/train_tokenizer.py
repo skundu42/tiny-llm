@@ -1,4 +1,5 @@
-"""Train the canonical 32k byte-level BPE tokenizer on FineWeb-Edu text."""
+"""Train the 32k byte-level BPE tokenizer on a HuggingFace dataset
+(FineWeb-Edu by default)."""
 import argparse
 import itertools
 import os
@@ -18,16 +19,23 @@ def main() -> None:
     p.add_argument("--vocab-size", type=int, default=32768)
     p.add_argument("--num-proc", type=int, default=max(1, os.cpu_count() - 2))
     p.add_argument("--min-word-freq", type=int, default=2)
+    p.add_argument("--dataset", default="HuggingFaceFW/fineweb-edu",
+                   help="HuggingFace dataset repo id")
+    p.add_argument("--dataset-config", default="sample-10BT",
+                   help="dataset config name; pass '' for datasets without one")
+    p.add_argument("--split", default="train")
+    p.add_argument("--text-key", default="text",
+                   help="column holding the document text")
     args = p.parse_args()
 
-    ds = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT",
-                      split="train", streaming=True)
+    ds = load_dataset(args.dataset, name=args.dataset_config or None,
+                      split=args.split, streaming=True)
     it = iter(ds)
 
     def texts():
         seen = 0
         for ex in it:
-            t = ex["text"]
+            t = ex[args.text_key]
             seen += len(t.encode("utf-8"))
             yield t
             if seen >= args.max_bytes:
@@ -42,7 +50,7 @@ def main() -> None:
     tok.save(args.out)
     print(f"saved {args.out}")
 
-    holdout = [ex["text"] for ex in itertools.islice(it, 100)]
+    holdout = [ex[args.text_key] for ex in itertools.islice(it, 100)]
     nbytes = sum(len(t.encode("utf-8")) for t in holdout)
     ntok = sum(len(tok.encode(t)) for t in holdout)
     print(f"compression on holdout: {nbytes / ntok:.3f} bytes/token")

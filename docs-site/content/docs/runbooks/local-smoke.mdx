@@ -5,14 +5,14 @@ description: The exact command sequence that trains a real 13.1M model end to en
 
 This is the runbook that proves the repo works. Every command below was run on an
 **Apple M3 Pro (18 GB), PyTorch MPS backend**, against the committed code, and
-**every number on this page is a measurement from that run** — not an estimate,
+**every number on this page is a measurement from that run**, not an estimate,
 not a projection. Total time is about 15 minutes of training plus a tokenizer and
 a data step you can shorten or skip.
 
 The `smoke` preset is not a toy reimplementation. It is the same `tinyllm.train`
 entry point, the same [Muon+AdamW split](/docs/training/muon), the same
 [WSD schedule](/docs/training), the same [data pipeline](/docs/data) and the
-same [model code](/docs/architecture) as the 489M `d26` run — only the config
+same [model code](/docs/architecture) as the 489M `d26` run; only the config
 differs. If this passes, the pipeline is wired correctly and the only thing
 `d26` adds is money.
 
@@ -49,7 +49,7 @@ uncached forward, and bit-exact resume.
 ## Step 2: Train the canonical tokenizer
 
 <Callout type="info">
-  **Skippable.** `tokenizer/tokenizer.json` is a **committed artifact** — the
+  **Skippable.** `tokenizer/tokenizer.json` is a **committed artifact**: the
   canonical tokenizer every recorded number on this page and in
   [cloud pretraining](/docs/runbooks/cloud-pretrain) uses. Skip to Step 4 unless
   you specifically want to reproduce it. Training your own produces a *different*
@@ -71,7 +71,7 @@ saved tokenizer/tokenizer.json
 compression on holdout: 4.517 bytes/token
 ```
 
-`--num-proc` defaults to `max(1, os.cpu_count() - 2)` — 9 workers on the recorded
+`--num-proc` defaults to `max(1, os.cpu_count() - 2)`: 9 workers on the recorded
 machine.
 
 **Measured result:**
@@ -84,7 +84,7 @@ machine.
 | Compression (100 held-out docs) | **4.517 bytes/token** |
 | `eot_id` | 32767 |
 
-4.517 bytes/token on documents the trainer never saw is the number that matters —
+4.517 bytes/token on documents the trainer never saw is the number that matters:
 it is measured on a holdout, so it reflects generalization rather than
 memorization. See [Tokenizer](/docs/tokenizer) for why 32,768 and how the trainer
 stays tractable in pure Python.
@@ -103,7 +103,7 @@ print(len(s.encode()) / len(ids), 'bytes/token on sample sentence')"
 
 Three assertions in five lines: the vocab is the size the model config expects,
 `eot_id` is where it should be, and **encode/decode round-trips exactly**. The
-round-trip is the important one — a byte-level BPE that does not reproduce its
+round-trip is the important one: a byte-level BPE that does not reproduce its
 input is silently corrupting your corpus.
 
 **Measured:** `5.00 bytes/token` on that sentence. Higher than the 4.517 holdout
@@ -128,7 +128,7 @@ done: 60,003,098 tokens (2,004,611 val, 57,998,487 train) in data/smoke
 
 That verification is not optional and not decorative. The corpus is encoded by a
 Rust `tokenizers` BPE built from our merges (~100× faster than the pure-Python
-encoder), but **our encoder is the ground truth** — `verify_fast` asserts the two
+encoder), but **our encoder is the ground truth**: `verify_fast` asserts the two
 produce byte-identical ids on 200 real documents before a single token is
 written. Details in [Tokenizer format and the fast
 path](/docs/tokenizer/format-and-fast-path).
@@ -164,12 +164,12 @@ The resulting `data/smoke/index.json`:
 
 Three things this makes concrete:
 
-- **Counts land slightly above the request** — 60,003,098 against `--max-tokens
+- **Counts land slightly above the request**: 60,003,098 against `--max-tokens
   60000000`, and 2,004,611 against `--val-tokens 2000000`. The writer never
   truncates mid-document: it finishes the batch of documents it is in, then
   stops. A ~3k-token overshoot on 60M is the tail of the final document batch.
 - **Val is filled first, then train.** The router is
-  `w = val_w if val_w.total_written < args.val_tokens else train_w` — every
+  `w = val_w if val_w.total_written < args.val_tokens else train_w`: every
   document goes to validation until the quota is met, and every one after goes to
   train. The splits are therefore **disjoint by construction**, with no document
   spanning both.
@@ -195,39 +195,39 @@ params: 13,111,296 | device mps | world 1 | grad_accum 4 | steps 600
 Every number there is derived, not configured. **13,111,296 params** is the
 `smoke` preset (6 layers, `d_model` 256, 4 heads / 2 KV heads, `d_ff` 768, context
 512) and is asserted exactly in the test suite. **`grad_accum 4`** is computed
-from the batch identity — `batch_tokens / (world × micro_batch_size × seq_len)` =
-`16,384 / (1 × 8 × 512)` = 4 — rather than read from config, which is what keeps
+from the batch identity (`batch_tokens / (world × micro_batch_size × seq_len)` =
+`16,384 / (1 × 8 × 512)` = 4) rather than read from config, which is what keeps
 the effective batch constant across hardware.
 
 `--tokenizer` is optional; passing it enables the periodic sample prints at
 `sample_every = 200`. Progress goes to stdout and to `out/smoke/log.csv`
-(`step, split, loss, lr_scale, tok_per_sec, mfu` — `mfu` stays empty off CUDA,
+(`step, split, loss, lr_scale, tok_per_sec, mfu`; `mfu` stays empty off CUDA,
 so every row from this MPS run has it blank); checkpoints land in
 `out/smoke/ckpt_last.pt` every 200 steps.
 
 ### The measured curve
 
-Straight from `out/smoke/log.csv` — the full 600-step schedule:
+Straight from `out/smoke/log.csv`, the full 600-step schedule:
 
 | Step | Train loss | Val loss |
 |---|---|---|
-| 0 | **10.4399** | — |
-| 99 | — | 6.7274 |
-| 100 | 6.6888 | — |
-| 199 | — | 6.2567 |
-| 200 | 6.1561 | — |
-| 299 | — | 5.9739 |
-| 300 | 5.8912 | — |
-| 399 | — | 5.7768 |
-| 400 | 5.6471 | — |
-| 499 | — | 5.6177 |
-| 500 | 5.5151 | — |
+| 0 | **10.4399** |  |
+| 99 |  | 6.7274 |
+| 100 | 6.6888 |  |
+| 199 |  | 6.2567 |
+| 200 | 6.1561 |  |
+| 299 |  | 5.9739 |
+| 300 | 5.8912 |  |
+| 399 |  | 5.7768 |
+| 400 | 5.6471 |  |
+| 499 |  | 5.6177 |
+| 500 | 5.5151 |  |
 | 599 | 5.5300 | **5.5012** |
 
 Validation fires on `(step + 1) % val_every == 0` with `val_every = 100`, which is
 why the val points sit at 99, 199, … and the train points at the `log_every = 10`
 multiples. Each val number is a mean over 8 batches × 8 sequences × 512 tokens =
-32,768 tokens, drawn from **fixed seeded crops** — the same crops at every
+32,768 tokens, drawn from **fixed seeded crops**: the same crops at every
 evaluation, which is what makes the column comparable down the page. See
 [Evaluation](/docs/evaluation#validation-loss).
 
@@ -237,19 +237,19 @@ evaluation, which is what makes the column comparable down the page. See
 is **10.4399**, and `ln(32768) = 10.3972`. A model that has learned nothing must
 spread probability uniformly over the vocabulary, giving a cross-entropy of
 exactly `ln(vocab_size)`. Landing **0.04 nats** above it says the
-[initialization](/docs/architecture/embeddings-and-init) is correct — the logits
+[initialization](/docs/architecture/embeddings-and-init) is correct: the logits
 start near-uniform rather than confidently wrong, which is what the 0.02 init and
 the `1/√(2L)` residual scaling are for. Had it started at 15, or at 3, something
 would be deeply wrong before a single gradient was taken.
 
-**Val tracks train the whole way down** — 6.7274 → 6.2567 → 5.9739 → 5.7768 →
-5.6177 → 5.5012, no divergence — and at the end val (5.5012) sits just *below*
+**Val tracks train the whole way down** (6.7274 → 6.2567 → 5.9739 → 5.7768 →
+5.6177 → 5.5012, no divergence) and at the end val (5.5012) sits just *below*
 train (5.5300). No overfitting, exactly as expected: 600 steps × 16,384 =
 **9,830,400 tokens** out of a 57,998,487-token training split is under a fifth of
 an epoch, so no example is ever seen twice and train and val crops are equally
 unfamiliar to the model.
 
-**Final val loss 5.50** — comfortably below the plan's ≤6.0 acceptance gate, and a
+**Final val loss 5.50**: comfortably below the plan's ≤6.0 acceptance gate, and a
 perplexity of ~245 over a 32,768-token vocab.
 
 **Throughput held at ~11,000-13,400 tok/s** on MPS, putting the 600 steps at
@@ -268,15 +268,15 @@ uv run python -m tinyllm.train --config smoke --device mps \
     --tokenizer tokenizer/tokenizer.json --steps 620 --resume
 ```
 
-`--resume` loads `out/smoke/ckpt_last.pt` — model weights **and both optimizers'
-state** — and continues from the stored step:
+`--resume` loads `out/smoke/ckpt_last.pt` (model weights **and both optimizers'
+state**) and continues from the stored step:
 
 ```
 resumed from out/smoke/ckpt_last.pt at step 600
 ```
 
 **Measured:** resumed at step 600, ran 20 more steps, val loss **5.4914** at step
-619 — continuing the curve smoothly down from 5.5012 rather than jumping. That is
+619, continuing the curve smoothly down from 5.5012 rather than jumping. That is
 the tell. A resume that drops the optimizer state produces a visible loss spike as
 Muon's momentum buffers and AdamW's moments rebuild from zero; this one does not,
 because `_save_ckpt` stores `[o.state_dict() for o in optimizers]` alongside the
@@ -284,7 +284,7 @@ weights and the training RNG is a pure function of `(seed, rank, step, micro)`
 rather than a stateful generator.
 
 This matters far more than it looks. **Checkpoint/resume is verified on a real
-run, not just in tests** — and it is the mechanism a
+run, not just in tests**, and it is the mechanism a
 [preempted cloud run](/docs/runbooks/cloud-pretrain#recovering-from-a-preemption)
 depends on to not lose 20 hours. See
 [Checkpointing](/docs/training/checkpointing) for the atomic-write and
@@ -318,7 +318,7 @@ These are the real recorded outputs.
 
 ### How to read this
 
-At 13M parameters and 600 steps — ~10M tokens seen — the model has learned
+At 13M parameters and 600 steps, ~10M tokens seen, the model has learned
 **English morphology, syntax, punctuation, and even quotation and list
 formatting**. The sentences are grammatical and fluent. Subject-verb agreement
 holds. Clauses nest correctly.
@@ -331,7 +331,7 @@ language and nothing about the world.
 
 **This is exactly what this scale and token budget predict, and it is the correct
 outcome for this run.** The point of the smoke run is that every component works
-end to end — not that the result is good. Semantic coherence is what the
+end to end, not that the result is good. Semantic coherence is what the
 [`d26` config](/docs/runbooks/cloud-pretrain) buys with 489M parameters and 10B
 tokens; you cannot get it from 13M parameters and 0.1% of the token budget, and a
 smoke run that produced it would mean the eval was lying.
@@ -351,5 +351,5 @@ smoke run that produced it would mean the eval was lying.
 | Generation works | Grammatical English from a 60-token prompt |
 
 Everything above is the same code path `d26` takes. The
-[cloud pretraining runbook](/docs/runbooks/cloud-pretrain) is the next step —
+[cloud pretraining runbook](/docs/runbooks/cloud-pretrain) is the next step:
 the same commands with `--config d26`, on an H100, for 20 hours.

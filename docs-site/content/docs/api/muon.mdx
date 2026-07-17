@@ -1,6 +1,6 @@
 ---
 title: tinyllm.muon
-description: zeropower_via_newtonschulz5, the Muon optimizer, and build_optimizers — exact signatures and the three-bucket parameter split
+description: zeropower_via_newtonschulz5, the Muon optimizer, and build_optimizers; exact signatures and the three-bucket parameter split
 ---
 
 91 lines: `tinyllm/muon.py`. An optimizer that orthogonalizes each 2-D weight's
@@ -15,9 +15,9 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor
     """Approximate UV^T for G = USV^T via quintic Newton-Schulz in bfloat16."""
 ```
 
-**Args:** `G` — a **2-D** tensor; `steps` — iterations (default `5`).
+**Args:** `G`: a **2-D** tensor; `steps`: iterations (default `5`).
 
-**Returns:** a tensor of `G`'s shape and dtype, approximating `U Vᵀ` — `G` with
+**Returns:** a tensor of `G`'s shape and dtype, approximating `U Vᵀ`: `G` with
 every singular value driven to ≈ 1.
 
 **Raises:** `AssertionError` if `G.ndim != 2`.
@@ -28,7 +28,7 @@ knowing as a caller:
 - Runs in **bfloat16** internally and casts back to `G.dtype` on the way out.
 - **Normalizes first** (`X / (X.norm() + 1e-7)`) into the basin the fixed
   coefficients `(3.4445, -4.7750, 2.0315)` converge from. Passing an unnormalized
-  matrix is fine — it does this itself.
+  matrix is fine; it does this itself.
 - **Transposes tall inputs** so the Gram matmuls run on the smaller side, and
   transposes back.
 - **Pure function.** `G` is not modified in place.
@@ -59,8 +59,8 @@ class Muon(torch.optim.Optimizer):
 
 | Arg | Default | Meaning |
 |---|---|---|
-| `params` | — | Iterable of parameters or param groups. **2-D only.** |
-| `lr` | `0.02` | Learning rate — ~30× AdamW's, because the update is unit-scaled |
+| `params` |  | Iterable of parameters or param groups. **2-D only.** |
+| `lr` | `0.02` | Learning rate: ~30× AdamW's, because the update is unit-scaled |
 | `momentum` | `0.95` | Gradient EMA coefficient |
 | `nesterov` | `True` | Blend the fresh gradient with the buffer before orthogonalizing |
 | `ns_steps` | `5` | Newton-Schulz iterations |
@@ -69,7 +69,7 @@ A standard `torch.optim.Optimizer`: `state_dict()` / `load_state_dict()` work, a
 that is how [checkpointing](/docs/training/checkpointing) preserves the momentum
 buffers across a resume.
 
-**State:** one `momentum_buffer` per parameter — **half of AdamW's two moments**,
+**State:** one `momentum_buffer` per parameter, **half of AdamW's two moments**,
 which is a real memory saving on the 447M parameters it owns here.
 
 <Callout type="warn">
@@ -86,14 +86,14 @@ def step(self) -> None:
     ...
 ```
 
-**Args:** none — **no `closure` parameter**, unlike most PyTorch optimizers.
+**Args:** none; **no `closure` parameter**, unlike most PyTorch optimizers.
 **Returns:** `None`.
 
 Per parameter: update the momentum EMA → optionally apply Nesterov → orthogonalize
 → scale by `max(1, rows/cols) ** 0.5` → `p -= lr × scale × update`. Parameters with
 `grad is None` are skipped.
 
-Note `step` does **not** zero gradients — the training loop calls
+Note `step` does **not** zero gradients; the training loop calls
 `opt.zero_grad(set_to_none=True)` explicitly.
 
 <Callout type="warn">
@@ -105,7 +105,7 @@ Note `step` does **not** zero gradients — the training loop calls
   this `p.grad`; and `zero_grad(set_to_none=True)` follows immediately,
   discarding the buffer rather than reusing it. **It would break under DDP's
   `gradient_as_bucket_view=True`**, which aliases `p.grad` to a communication
-  bucket — mutating it in place would corrupt the bucket instead of just the
+  bucket; mutating it in place would corrupt the bucket instead of just the
   local gradient. `tinyllm`'s DDP wrapper does not set that flag.
 </Callout>
 
@@ -116,10 +116,10 @@ def build_optimizers(model: nn.Module, cfg: TrainConfig) -> list[torch.optim.Opt
     """Muon for hidden 2-D matrices; AdamW for the (tied) embedding and norm gains."""
 ```
 
-**Args:** `model` — any `nn.Module`; `cfg` — a `TrainConfig` supplying `muon_lr`,
+**Args:** `model`: any `nn.Module`; `cfg`: a `TrainConfig` supplying `muon_lr`,
 `muon_momentum`, `adamw_lr`, `adamw_betas`, `adamw_wd`.
 
-**Returns:** `[muon, adamw]` — **two** optimizers, in that order. The training loop
+**Returns:** `[muon, adamw]`: **two** optimizers, in that order. The training loop
 steps both.
 
 The sort is by **shape and name**:
@@ -138,12 +138,12 @@ for name, p in model.named_parameters():
 
 | Bucket | Rule | Contents (`d26`) | Optimizer |
 |---|---|---|---|
-| `hidden` | 2-D, name lacks `"embed"` | 7 matrices × 26 layers — `wq`, `wk`, `wv`, `wo`, `w_gate`, `w_up`, `w_down` (**447,283,200** params) | **Muon**, `lr=0.02` |
+| `hidden` | 2-D, name lacks `"embed"` | 7 matrices × 26 layers: `wq`, `wk`, `wv`, `wo`, `w_gate`, `w_up`, `w_down` (**447,283,200** params) | **Muon**, `lr=0.02` |
 | `embed` | 2-D, name has `"embed"` | The tied token embedding (**41,943,040**) | **AdamW**, `lr=6e-4`, `wd=0.1` |
 | `norms` | everything else (1-D) | Every `RMSNorm` gain (**71,168**) | **AdamW**, `lr=6e-4`, `wd=0.0` |
 
 **Weight tying is why the name check works.** `lm_head.weight` *is*
-`embed.weight`, and `named_parameters()` deduplicates shared storage — the tensor
+`embed.weight`, and `named_parameters()` deduplicates shared storage: the tensor
 is yielded once, under the `embed.weight` name. So it lands in the `embed` bucket
 and never in `hidden`, despite being the output projection too.
 
@@ -156,7 +156,7 @@ for opt in (muon, adamw):
 ```
 
 This is the hook the [WSD schedule](/docs/training#the-wsd-learning-rate-schedule)
-scales each step — `group["lr"] = group["initial_lr"] * scale` — so Muon's `0.02`
+scales each step (`group["lr"] = group["initial_lr"] * scale`), so Muon's `0.02`
 and AdamW's `6e-4` ride the same curve off their own bases. **A hand-built
 optimizer without `initial_lr` will `KeyError` on the first step of `run`.**
 

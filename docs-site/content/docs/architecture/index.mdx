@@ -9,7 +9,7 @@ tied embeddings, and **no biases anywhere**. This page walks the forward pass
 from token IDs to logits and accounts for every one of the 489,297,408
 parameters. Each component gets its own page for the math and the rationale.
 
-The design is the modern decoder-only consensus — roughly Llama-shaped, with
+The design is the modern decoder-only consensus: roughly Llama-shaped, with
 QK-norm borrowed from the more recent stability literature. Nothing here is
 novel, and that is deliberate: the point is that every line is written and
 understood rather than imported.
@@ -34,7 +34,7 @@ identical code path.
 | `rope_theta` | 10,000 | 10,000 |
 | `norm_eps` | 1e-6 | 1e-6 |
 
-`head_dim` is not a field — it is derived, and `__post_init__` enforces the two
+`head_dim` is not a field; it is derived, and `__post_init__` enforces the two
 invariants the attention implementation depends on:
 
 ```python
@@ -49,7 +49,7 @@ def head_dim(self) -> int:
 
 `d_model % n_head == 0` makes `head_dim` an integer; `n_head % n_kv_head == 0`
 makes the GQA repeat factor `n_head // n_kv_head` an integer. For `d26` that is
-`1280 / 20 = 64` and `20 / 4 = 5` — five query heads share each KV head.
+`1280 / 20 = 64` and `20 / 4 = 5`: five query heads share each KV head.
 
 The shape choices are conventional for the scale. `head_dim = 64` is the sweet
 spot every fast attention kernel is tuned for. `d_model = 1280` with 26 layers is
@@ -90,30 +90,30 @@ Step by step, for input `idx` of shape `(B, T)` integer token IDs:
 1. **Slice the RoPE tables.** `cos`/`sin` are precomputed once in `__init__` and
    registered as non-persistent buffers (they are a pure function of
    `head_dim`, `seq_len`, and `theta`, so there is no reason to store them in a
-   checkpoint). The slice starts at `pos0` — `0` for a training forward, and the
+   checkpoint). The slice starts at `pos0`: `0` for a training forward, and the
    cache's current position when decoding, so token number 137 gets rotated by
    position 137 even though `T == 1`. See [RoPE](/docs/architecture/rope).
 
 2. **Embed.** `self.embed(idx)` is a lookup into a `(32768, 1280)` table,
    producing `x` of shape `(B, T, 1280)`. There is no positional embedding added
-   here — position enters only inside attention, via RoPE.
+   here; position enters only inside attention, via RoPE.
 
 3. **26 blocks.** Each block reads and writes the same `(B, T, 1280)` residual
    stream. `cos`, `sin`, and the `cache` pass straight through.
 
 4. **Final norm.** One last [RMSNorm](/docs/architecture/rmsnorm) before the
-   output projection — the pre-norm architecture's residual stream is never
+   output projection: the pre-norm architecture's residual stream is never
    normalized on its way through, so it must be normalized once at the end.
 
 5. **Project to logits and compute loss.** `lm_head` is the transposed embedding
    ([tied weights](/docs/architecture/embeddings-and-init)). Cross-entropy is
-   computed in **fp32** — `logits.float()` — because under bf16 autocast the
+   computed in **fp32** (`logits.float()`) because under bf16 autocast the
    softmax over 32,768 classes is exactly the reduction where limited mantissa
    bits hurt. `ignore_index=-1` lets the data pipeline mask positions out.
 
 The three return paths matter. With `targets`, you get `(logits, loss)` for
 training. With a `cache` and no targets, only the **last** position's logits are
-projected (`x[:, -1:, :]`) — during decoding the other `T-1` positions are dead
+projected (`x[:, -1:, :]`): during decoding the other `T-1` positions are dead
 weight, and skipping them avoids a `(B, T, 32768)` matmul. With neither, all
 positions are projected.
 
@@ -135,7 +135,7 @@ trains without a warmup-heavy babysitting schedule. In post-norm
 normalization sits **on** the residual path, so the identity path is repeatedly
 rescaled and the gradient reaching layer 0 is attenuated by 26 norms. In
 pre-norm, the residual path from the embedding to `final_norm` is a **clean sum**
-— `x = embed + branch₁ + branch₂ + ... + branch₅₂` — with nothing but additions
+(`x = embed + branch₁ + branch₂ + ... + branch₅₂`) with nothing but additions
 on it. Gradients flow to every layer undiminished, and deep stacks train stably.
 
 The cost is that the residual stream's variance grows as branches accumulate,
@@ -144,10 +144,10 @@ which is exactly why `final_norm` exists and why the residual projections get
 
 The four sub-modules per block, in order of execution:
 
-- `attn_norm` — [RMSNorm](/docs/architecture/rmsnorm) over `d_model`
-- `attn` — [grouped-query attention with QK-norm](/docs/architecture/attention)
-- `mlp_norm` — RMSNorm over `d_model`
-- `mlp` — [SwiGLU](/docs/architecture/swiglu)
+- `attn_norm`: [RMSNorm](/docs/architecture/rmsnorm) over `d_model`
+- `attn`: [grouped-query attention with QK-norm](/docs/architecture/attention)
+- `mlp_norm`: RMSNorm over `d_model`
+- `mlp`: [SwiGLU](/docs/architecture/swiglu)
 
 ## The exact parameter budget
 
@@ -164,7 +164,7 @@ def test_param_counts_exact():
     assert smoke.num_params() == 13_111_296
 ```
 
-(The `meta` device builds the model without allocating any storage — the shapes
+(The `meta` device builds the model without allocating any storage; the shapes
 are all that matter for a count.)
 
 ### Per layer: 17,205,888
@@ -186,7 +186,7 @@ are all that matter for a count.)
 | **MLP subtotal** | 3 × 1280 × 3456 | **13,271,040** |
 | **Block total** | | **17,205,888** |
 
-Two things jump out. **`wk` and `wv` are one fifth the size of `wq`** — that is
+Two things jump out. **`wk` and `wv` are one fifth the size of `wq`**: that is
 GQA, 4 KV heads instead of 20, and it is worth 2,621,440 parameters per layer.
 And **the MLP is 77% of the block** (13,271,040 of 17,205,888): in a modern
 transformer at this scale, most of the parameters are in the feed-forward layers,
@@ -196,14 +196,14 @@ not attention.
 
 | Component | Params |
 |---|---|
-| `embed` (tied with `lm_head`) — 32,768 × 1,280 | 41,943,040 |
-| 26 × block — 26 × 17,205,888 | 447,353,088 |
+| `embed` (tied with `lm_head`): 32,768 × 1,280 | 41,943,040 |
+| 26 × block: 26 × 17,205,888 | 447,353,088 |
 | `final_norm` | 1,280 |
 | **Total** | **489,297,408** |
 | Non-embedding (447,353,088 + 1,280) | **447,354,368** |
 
 The embedding is counted **once**, not twice, because `lm_head.weight` *is*
-`embed.weight` — the same tensor object. Weight tying saves 41,943,040
+`embed.weight`, the same tensor object. Weight tying saves 41,943,040
 parameters, about **8.6%** of the model; see
 [Embeddings & init](/docs/architecture/embeddings-and-init#weight-tying).
 
@@ -219,13 +219,13 @@ def num_params(self, non_embedding: bool = False) -> int:
 
 The non-embedding count is the one that matters for scaling laws and for the
 `6·N·tokens` FLOPs estimate used in the [MFU
-calculation](/docs/training) — the embedding is a lookup, not a matmul, so
+calculation](/docs/training): the embedding is a lookup, not a matmul, so
 it contributes no FLOPs on the input side.
 
 ## Read next
 
-- [RMSNorm](/docs/architecture/rmsnorm) — why not LayerNorm, and the fp32 dance.
-- [RoPE](/docs/architecture/rope) — the rotation and the relative-position proof.
-- [Attention](/docs/architecture/attention) — GQA, QK-norm, and the KV cache.
-- [SwiGLU](/docs/architecture/swiglu) — the gate, and where 3456 comes from.
-- [Embeddings & init](/docs/architecture/embeddings-and-init) — tying and 1/√(2L).
+- [RMSNorm](/docs/architecture/rmsnorm): why not LayerNorm, and the fp32 dance.
+- [RoPE](/docs/architecture/rope): the rotation and the relative-position proof.
+- [Attention](/docs/architecture/attention): GQA, QK-norm, and the KV cache.
+- [SwiGLU](/docs/architecture/swiglu): the gate, and where 3456 comes from.
+- [Embeddings & init](/docs/architecture/embeddings-and-init): tying and 1/√(2L).

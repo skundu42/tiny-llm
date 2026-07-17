@@ -1,6 +1,6 @@
 ---
 title: RMSNorm
-description: LayerNorm without the mean subtraction — the math, why the centering was never needed, and why the computation is forced to fp32
+description: LayerNorm without the mean subtraction. The math, why the centering was never needed, and why the computation is forced to fp32
 ---
 
 Every normalization in the model is RMSNorm: the two per-block norms, the
@@ -42,9 +42,9 @@ RMS(x)  = γ ⊙ x / √(rms(x)² + ε)
 ```
 
 Line by line, that is exactly the code. `x.pow(2).mean(-1, keepdim=True)` is
-`rms(x)²` — the mean of squares over the last (feature) dimension, keeping the
+`rms(x)²`: the mean of squares over the last (feature) dimension, keeping the
 dim so it broadcasts back over `(..., d)`. Adding `eps` and taking
-`torch.rsqrt` gives `1 / √(rms² + ε)` in one fused op — the reciprocal square
+`torch.rsqrt` gives `1 / √(rms² + ε)` in one fused op; the reciprocal square
 root is cheaper than a `sqrt` followed by a divide. Multiplying by `self.weight`
 applies the per-feature gain `γ`.
 
@@ -71,15 +71,15 @@ Two practical arguments back the removal:
   recent open model use it. This is the settled consensus, not a gamble.
 - **It is cheaper.** LayerNorm needs two reductions over the feature dim (one for
   the mean, one for the variance around it) and the subtraction. RMSNorm needs
-  one reduction and no subtraction. Normalization is memory-bandwidth-bound — it
-  reads and writes the whole activation tensor while doing almost no arithmetic —
+  one reduction and no subtraction. Normalization is memory-bandwidth-bound (it
+  reads and writes the whole activation tensor while doing almost no arithmetic),
   so removing a full pass over the data is a real saving. In `d26` this module
   runs **105 times per forward** (26 × `attn_norm`, 26 × `mlp_norm`, 26 × 2
   per-head QK-norm, plus `final_norm`), and the small ones sit directly in the
   attention hot path.
 
 Note also that in a pre-norm network the thing being normalized is the residual
-stream, whose mean is already near zero at initialization and stays small —
+stream, whose mean is already near zero at initialization and stays small;
 there is not much of a center to remove in the first place.
 
 The learned gain is initialized to **ones** (`torch.ones(dim)`), so at
@@ -95,7 +95,7 @@ def test_rmsnorm_unit_rms():
     assert torch.allclose(rms, torch.ones_like(rms), atol=1e-3)
 ```
 
-Input scaled up by 3× comes out with RMS 1 regardless — that scale invariance is
+Input scaled up by 3× comes out with RMS 1 regardless; that scale invariance is
 the whole point.
 
 ## Why compute in fp32 and cast back
@@ -110,7 +110,7 @@ return (x * self.weight.float()).to(dtype)
 ```
 
 Remember the number this must not corrupt. Training runs under **bf16 autocast**
-([details](/docs/training)), so `x` arrives as bfloat16 — which has an
+([details](/docs/training)), so `x` arrives as bfloat16, which has an
 8-bit exponent (the same enormous range as fp32) but only **7 mantissa bits**,
 i.e. roughly 2-3 decimal digits of precision.
 
@@ -122,13 +122,13 @@ Now look at what the sum of squares does. Reducing `x.pow(2)` over `d_model =
   survives this, but the accumulation is where it breaks down.
 - **The accumulation loses small terms.** Adding 1280 numbers sequentially into a
   7-mantissa-bit accumulator means that once the running sum is large, each new
-  small term is **rounded away entirely** — a term smaller than about 1/256 of
+  small term is **rounded away entirely**: a term smaller than about 1/256 of
   the running sum contributes nothing. The error compounds across the reduction,
   and the resulting `rms` can be off by a percent or more.
 
 An error in `rms` is not a small perturbation, because the whole tensor is then
 **divided by it**. A 1% error in the norm is a 1% multiplicative error on all
-1280 features simultaneously — a systematic, correlated bias applied to the input
+1280 features simultaneously: a systematic, correlated bias applied to the input
 of the next matmul, not the kind of unbiased noise that averages out. Repeat that
 105 times per forward pass, in the one module whose entire job is to produce a
 precise scale factor, and it becomes a genuine training-stability problem.
@@ -141,7 +141,7 @@ graph is unaffected.
 
 This costs essentially nothing. Normalization is bandwidth-bound, not
 compute-bound; the fp32 arithmetic is free relative to the memory traffic, and
-the upcast happens on data already in registers. It is the standard trick — the
+the upcast happens on data already in registers. It is the standard trick, the
 same reason [cross-entropy is computed in
 fp32](/docs/architecture#the-forward-pass) at the end of the forward pass.
 

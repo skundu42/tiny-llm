@@ -56,7 +56,7 @@ class Muon(torch.optim.Optimizer):
                 # reads this `p.grad`; and `zero_grad(set_to_none=True)` follows
                 # this step, discarding the buffer rather than reusing it. This
                 # would break under DDP's `gradient_as_bucket_view=True`, which
-                # aliases `p.grad` to a reduction bucket — mutating it in place
+                # aliases `p.grad` to a reduction bucket; mutating it in place
                 # would corrupt the bucket instead of just the local gradient.
                 g = g.lerp_(buf, group["momentum"]) if group["nesterov"] else buf
                 g = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])

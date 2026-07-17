@@ -1,0 +1,153 @@
+---
+title: Train on a custom dataset
+description: Use any HuggingFace text dataset for tokenizer training, shard preparation, and pretraining
+---
+
+Everything downstream of data preparation is dataset-agnostic: the training
+loop only ever reads uint16 token shards from a directory (see
+[Data pipeline](/docs/data)). Swapping FineWeb-Edu for another corpus therefore
+means pointing two scripts at a different dataset and keeping the rest of the
+pipeline unchanged.
+
+Both `scripts/train_tokenizer.py` and `scripts/prepare_data.py` accept the same
+four flags:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dataset` | `HuggingFaceFW/fineweb-edu` | HuggingFace dataset repo id |
+| `--dataset-config` | `sample-10BT` | Config (subset) name. Pass `''` for datasets that have no config |
+| `--split` | `train` | Split to stream |
+| `--text-key` | `text` | Column that holds the document text |
+
+The dataset is streamed (`streaming=True`), so nothing is downloaded up front
+and corpora larger than your disk are fine. Any string column works as input;
+the byte-level BPE tokenizer operates on raw UTF-8 bytes, so code, non-English
+text, and mixed corpora all tokenize without special handling. Gated datasets
+need a HuggingFace login first (`hf auth login`, or set `HF_TOKEN`).
+
+## 1. Identify the dataset coordinates
+
+Find the repo id, config name, split, and text column on the dataset's
+HuggingFace page. A few examples:
+
+| Dataset | `--dataset` | `--dataset-config` | `--text-key` |
+|---|---|---|---|
+| TinyStories | `roneneldan/TinyStories` | `''` | `text` |
+| C4 (English) | `allenai/c4` | `en` | `text` |
+| Wikipedia (English) | `wikimedia/wikipedia` | `20231101.en` | `text` |
+
+## 2. Train a tokenizer on the new corpus
+
+You can reuse an existing `tokenizer/tokenizer.json`, but a tokenizer trained
+on the target corpus compresses it better, and the gap grows the further the
+domain is from FineWeb-Edu (code and non-English text especially). Training
+reads a byte budget, not the whole dataset:
+
+```bash
+uv run python scripts/train_tokenizer.py \
+    --dataset allenai/c4 --dataset-config en \
+    --out tokenizer/c4.json \
+    --max-bytes 250_000_000
+```
+
+The script reports bytes/token compression on 100 held-out documents at the
+end; the canonical FineWeb-Edu tokenizer reaches 4.517. Two constraints:
+
+- Keep `--vocab-size` at most 65,536: shards store token ids as uint16.
+- The model presets fix `vocab_size = 32768` in `ModelConfig`, so keep the
+  default vocab size unless you also change the model config.
+
+See [Tokenizer training](/docs/tokenizer/training) for what happens inside.
+
+## 3. Prepare shards
+
+Encode the corpus into token shards with the same dataset flags. Use a fresh
+`--data-dir` per dataset; the shard writer refuses to overwrite an existing
+split.
+
+```bash
+uv run python scripts/prepare_data.py \
+    --dataset allenai/c4 --dataset-config en \
+    --tokenizer tokenizer/c4.json \
+    --data-dir data/c4 \
+    --val-tokens 10_000_000 \
+    --shard-tokens 100_000_000 \
+    --max-tokens 1_000_000_000
+```
+
+What to know when sizing the flags:
+
+- `--max-tokens` caps how much of the stream is consumed; `0` means the whole
+  split. For unbounded corpora like C4, set an explicit budget.
+- Validation shards are filled first, then training shards, with the
+  tokenizer's `eot` token appended after every document. Size `--val-tokens`
+  to your corpus: the 10M default is sensible for billions of tokens but far
+  too large for a small dataset, where it would swallow everything.
+- Every shard must hold at least `seq_len + 1` tokens (2049 for `d26`, 513 for
+  `smoke`) or the sampler cannot crop from it. Default shard sizes are far
+  above this; it only matters if you shrink `--shard-tokens` drastically.
+
+## 4. Train
+
+Point the trainer at the new shard directory. `--data-dir`, `--out-dir`, and
+`--steps` override the preset's values:
+
+```bash
+uv run python -m tinyllm.train --config d26 \
+    --tokenizer tokenizer/c4.json \
+    --data-dir data/c4 \
+    --out-dir out/c4-d26 \
+    --steps 1907
+```
+
+Sizing `--steps` is the one real decision. Tokens seen equals
+`steps × batch_tokens` (524,288 for `d26`, 16,384 for `smoke`), and the
+Chinchilla-style rule of thumb is about 20 tokens per parameter, which is
+where the `d26` default of 19,073 steps on ~10B tokens comes from. The example
+above covers the 1B-token C4 preparation about once.
+
+The sampler draws random crops with replacement, so a corpus smaller than the
+token budget is simply seen multiple times; there is no epoch bookkeeping to
+adjust. Heavy repetition shows up as a widening gap between train and val
+loss, so watch `out/<run>/log.csv` if your dataset is much smaller than the
+budget.
+
+Sampling and evaluation work unchanged; pass the matching tokenizer:
+
+```bash
+uv run python -m tinyllm.sample --ckpt out/c4-d26/ckpt_last.pt \
+    --tokenizer tokenizer/c4.json --prompt "The capital of France"
+```
+
+## Worked example: TinyStories on a laptop
+
+The whole path, sized to finish on Apple Silicon in well under an hour with
+the 13.1M-parameter `smoke` preset:
+
+```bash
+# 1. tokenizer (a few minutes on a small byte budget)
+uv run python scripts/train_tokenizer.py \
+    --dataset roneneldan/TinyStories --dataset-config '' \
+    --out tokenizer/tinystories.json \
+    --max-bytes 50_000_000
+
+# 2. shards (~60M tokens, 2M held out for validation)
+uv run python scripts/prepare_data.py \
+    --dataset roneneldan/TinyStories --dataset-config '' \
+    --tokenizer tokenizer/tinystories.json \
+    --data-dir data/tinystories \
+    --max-tokens 60_000_000 --val-tokens 2_000_000 --shard-tokens 25_000_000
+
+# 3. train the smoke model (~15-30 min on MPS or CPU)
+uv run python -m tinyllm.train --config smoke \
+    --tokenizer tokenizer/tinystories.json \
+    --data-dir data/tinystories --out-dir out/tinystories-smoke
+
+# 4. sample
+uv run python -m tinyllm.sample --ckpt out/tinystories-smoke/ckpt_last.pt \
+    --tokenizer tokenizer/tinystories.json --prompt "Once upon a time"
+```
+
+For a real-size run on a rented GPU box, follow
+[Cloud pretraining](/docs/runbooks/cloud-pretrain) and add the dataset flags
+to the tokenizer and data steps.

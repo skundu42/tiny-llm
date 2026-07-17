@@ -3,8 +3,8 @@ title: Byte-level BPE
 description: How the tokenizer turns text into integers, from raw bytes up
 ---
 
-The tokenizer is the boundary between text and tensors. Everything downstream —
-the embedding table, the sampler, the loss — operates on integer token ids, so
+The tokenizer is the boundary between text and tensors. Everything downstream
+(the embedding table, the sampler, the loss) operates on integer token ids, so
 the design choices here quietly set the terms for the whole model. `tinyllm`
 ships a byte-level Byte-Pair Encoding (BPE) tokenizer written from scratch in
 `tinyllm/tokenizer.py`, with no dependency on `tiktoken` or a pretrained vocab.
@@ -17,7 +17,7 @@ A tokenizer has to satisfy two competing goals: it must be able to represent
 compactly so sequences stay short.
 
 Start from the failure mode of a naive word or character vocabulary. A
-word-level vocab cannot encode a word it never saw during training — it has to
+word-level vocab cannot encode a word it never saw during training; it has to
 fall back to an `<unk>` token, which is lossy and irreversible. A pure
 character vocab never fails, but it makes sequences enormously long, and "long
 sequence" is expensive: attention is quadratic in sequence length and every
@@ -57,7 +57,7 @@ for i, (a, b) in enumerate(self.merges):
 The one special token is `<|endoftext|>`, assigned the id immediately after the
 last merge. It marks document boundaries in the training stream (see
 [Data](/docs/data)) and is the natural prompt for unconditional generation. It
-is deliberately **never produced by `encode`** — special tokens live outside
+is deliberately **never produced by `encode`**: special tokens live outside
 the byte space so no ordinary text can accidentally emit one.
 
 ## Pre-tokenization: splitting before merging
@@ -65,7 +65,7 @@ the byte space so no ordinary text can accidentally emit one.
 BPE does not merge across the whole document freely. If it did, it would learn
 merges that span word boundaries (` the quick` as one token) and glue
 punctuation onto words in ways that generalize poorly. Instead, text is first
-chopped into **pre-tokens** — rough word-like chunks — and merges are only ever
+chopped into **pre-tokens** (rough word-like chunks), and merges are only ever
 allowed *within* a pre-token. A merge can never cross a chunk boundary.
 
 The split is done with a regular expression. `tinyllm` uses the GPT-4-style
@@ -88,13 +88,13 @@ It is one big alternation (`|`). At each position the engine tries the branches
 left to right and takes the first that matches, so **order is meaningful**.
 Here is each branch, in order:
 
-1. **`'(?i:[sdmt]|ll|ve|re)`** — English contraction suffixes. An apostrophe
+1. **`'(?i:[sdmt]|ll|ve|re)`**: English contraction suffixes. An apostrophe
    followed by `s`, `d`, `m`, `t`, or by `ll`, `ve`, `re`. The `(?i:...)` makes
    just this group case-insensitive, so `'S` and `'LL` match too. This is what
    splits `don't` into `don` + `'t` and `we'll` into `we` + `'ll`, keeping the
    clitic as its own chunk instead of fusing it onto the stem.
 
-2. **`` [^\r\n\p{L}\p{N}]?\p{L}+ ``** — the workhorse "word" branch. An
+2. **`` [^\r\n\p{L}\p{N}]?\p{L}+ ``**: the workhorse "word" branch. An
    *optional* single leading character that is not a newline, letter, or number
    (in practice a leading space or an opening punctuation mark), followed by one
    or more Unicode letters (`\p{L}+`). The optional leading character is why the
@@ -103,26 +103,26 @@ Here is each branch, in order:
    single token encode the common case of "space then word" and is why you often
    see leading-space tokens in these vocabularies.
 
-3. **`\p{N}{1,3}`** — numbers, in runs of **at most three** digits. `2048`
+3. **`\p{N}{1,3}`**: numbers, in runs of **at most three** digits. `2048`
    becomes `204` + `8`, `1000000` becomes `100` + `000` + `0`. Capping numeric
    runs at three digits bounds how many distinct number tokens BPE can learn and
    stops the vocab from wasting merges memorizing arbitrary long integers.
 
-4. **`` ?[^\s\p{L}\p{N}]+[\r\n]* ``** — punctuation and symbols. An optional
+4. **`` ?[^\s\p{L}\p{N}]+[\r\n]* ``**: punctuation and symbols. An optional
    leading space, then a run of one or more characters that are neither
    whitespace, letters, nor numbers, then any trailing newlines. This groups
    ` ...`, `!!!`, or `=>` into single chunks and lets a punctuation run swallow
    the line breaks that follow it.
 
-5. **`\s*[\r\n]`** — a whitespace run that ends at a newline. This captures line
+5. **`\s*[\r\n]`**: a whitespace run that ends at a newline. This captures line
    breaks together with any indentation leading up to them, which matters for
    code and for preserving blank-line structure.
 
-6. **`\s+(?!\S)`** — a whitespace run **not** followed by a non-whitespace
+6. **`\s+(?!\S)`**: a whitespace run **not** followed by a non-whitespace
    character: trailing whitespace at the very end of the text. The negative
    lookahead `(?!\S)` is what pins it to "nothing but whitespace remains."
 
-7. **`\s+`** — the catch-all: any remaining run of whitespace, used for the
+7. **`\s+`**, the catch-all: any remaining run of whitespace, used for the
    ordinary spaces between chunks that none of the earlier branches claimed.
 
 Because pre-tokenization runs on both the training corpus and every `encode`
@@ -147,7 +147,7 @@ possessive quantifiers, and `tinyllm` wants to hand that engine the *exact same*
 pattern so it can offload bulk encoding to it (see
 [Format and the fast path](/docs/tokenizer/format-and-fast-path)). In these
 branches, where each quantified class is immediately followed by a class that
-cannot overlap it, greedy and possessive matching produce identical splits — so
+cannot overlap it, greedy and possessive matching produce identical splits, so
 dropping the possessives costs nothing in behavior and buys cross-engine parity,
 which is then checked byte-for-byte before the fast engine is trusted.
 
@@ -157,8 +157,8 @@ The default vocabulary size is `32768` = 2^15. Three forces pin it there:
 
 - **It has to fit in `uint16`.** Token ids are stored on disk as unsigned
   16-bit integers (see [Data](/docs/data)), which caps the vocab at 65,536.
-  `32768` sits comfortably under that ceiling with room to spare, so every id —
-  bytes, merges, and the special token — fits in two bytes and the shard files
+  `32768` sits comfortably under that ceiling with room to spare, so every id
+  (bytes, merges, and the special token) fits in two bytes and the shard files
   are half the size they would be at 32-bit.
 - **A power of two is kernel-friendly.** The embedding and the tied output
   softmax both have a dimension equal to the vocab size; keeping it a clean
@@ -177,15 +177,15 @@ Given `vocab_size = 32768`, the tokenizer learns
 n_merges = vocab_size - 256 - 1 = 32511
 ```
 
-merges — every id from `256` to `32766` is a learned token, and `32767` is
+merges: every id from `256` to `32766` is a learned token, and `32767` is
 `<|endoftext|>`.
 
 ## Where to go next
 
-- [Training the vocabulary](/docs/tokenizer/training) — the word-count plus
+- [Training the vocabulary](/docs/tokenizer/training): the word-count plus
   incremental pair-index algorithm that makes 32k merges over ~1 GB of text
   tractable in pure Python, and how ties are broken so the result is
   deterministic.
-- [Format and the fast path](/docs/tokenizer/format-and-fast-path) — the JSON
+- [Format and the fast path](/docs/tokenizer/format-and-fast-path): the JSON
   on-disk format, the byte-to-unicode table, and the Hugging Face export with
   its byte-identical parity check.

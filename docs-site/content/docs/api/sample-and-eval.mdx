@@ -1,6 +1,6 @@
 ---
 title: tinyllm.sample & tinyllm.eval_hellaswag
-description: load_model, ending_losses, and both CLI entry points — generating text and scoring HellaSwag from a checkpoint
+description: load_model, ending_losses, and both CLI entry points; generating text and scoring HellaSwag from a checkpoint
 ---
 
 The two things you do with a finished checkpoint: read what it writes, and measure
@@ -22,14 +22,14 @@ def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
     return model, cfg
 ```
 
-**Args:** `ckpt_path` — path to a `ckpt_last.pt`; `device` — where to map it.
+**Args:** `ckpt_path`: path to a `ckpt_last.pt`; `device`: where to map it.
 
-**Returns:** `(model, cfg)` — a `TinyLLM` in `eval()` mode, and the `ModelConfig`
+**Returns:** `(model, cfg)`: a `TinyLLM` in `eval()` mode, and the `ModelConfig`
 it was built from.
 
 **The architecture is reconstructed from the checkpoint**, not passed in.
 `train.py` stores `asdict(model_cfg)`, so `ModelConfig(**ckpt["model_cfg"])`
-rebuilds the exact shape the weights expect — you never have to remember which
+rebuilds the exact shape the weights expect; you never have to remember which
 preset produced a file, and a mismatch is impossible rather than merely unlikely.
 `cfg` is returned because callers need it: `eval_hellaswag` uses `cfg.seq_len` to
 decide which examples fit.
@@ -37,11 +37,11 @@ decide which examples fit.
 Two things to note:
 
 - **`weights_only=False`** is required because the checkpoint holds config dicts
-  and optimizer state, not just tensors. **Only load checkpoints you trust** —
+  and optimizer state, not just tensors. **Only load checkpoints you trust**:
   this path can execute arbitrary code via pickle.
 - **The model loads in fp32.** `TinyLLM(cfg)` constructs at PyTorch's default
   dtype and the checkpoint's fp32 master weights load straight in. Cast with
-  `model.bfloat16()` if you want bf16 — the [KV cache follows
+  `model.bfloat16()` if you want bf16; the [KV cache follows
   automatically](/docs/inference#a-note-on-dtype), since its dtype is read off
   `embed.weight`.
 
@@ -82,7 +82,7 @@ uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt \
 | `--max-new-tokens` | `200` | Tokens to generate |
 | `--temperature` | `0.8` | `0` = greedy |
 | `--top-k` | `50` | Top-k truncation |
-| `--top-p` | `None` | Nucleus — off by default |
+| `--top-p` | `None` | Nucleus, off by default |
 | `--seed` | `0` | `torch.manual_seed`; irrelevant when `--temperature 0` |
 | `--device` | auto | `cuda` → `mps` → `cpu` |
 
@@ -98,14 +98,14 @@ print(tok.decode(out[0].tolist()[1:]))
 
 **The prompt is prefixed with `eot_id` and the output decoded from `[1:]` to strip
 it.** `<|endoftext|>` is the document separator the model saw between every pair of
-training documents, so it is the token meaning "a document starts here" — and it
+training documents, so it is the token meaning "a document starts here", and it
 makes an empty prompt well-defined as the length-1 sequence `[[eot_id]]`. It is
 also passed as `eos_id`, so generation stops at a document boundary instead of
 always running the full budget.
 
 <Callout type="warn">
   **The tokenizer must be the one the model trained on.** Token ids are meaningless
-  across tokenizers — a mismatch produces fluent-looking garbage from `sample` and
+  across tokenizers: a mismatch produces fluent-looking garbage from `sample` and
   exactly-chance scores from `eval_hellaswag`, with no error either way.
   `tokenizer/tokenizer.json` is committed for precisely this reason.
 </Callout>
@@ -120,22 +120,22 @@ def ending_losses(model, ctx_ids, ending_ids_list, device) -> list[tuple[float, 
     """Per ending: (sum, mean) cross-entropy over the ending tokens only."""
 ```
 
-**Args:** `model` — a `TinyLLM` (anything with `(logits, loss)` from
-`model(ids)`); `ctx_ids` — `list[int]`, the shared context; `ending_ids_list` —
+**Args:** `model`: a `TinyLLM` (anything with `(logits, loss)` from
+`model(ids)`); `ctx_ids`: `list[int]`, the shared context; `ending_ids_list`:
 `list[list[int]]`, candidate endings; `device`.
 
-**Returns:** `list[tuple[float, float]]` — one `(sum, mean)` per ending, in input
+**Returns:** `list[tuple[float, float]]`: one `(sum, mean)` per ending, in input
 order. `sum` is the ending's total cross-entropy in nats; `mean` is that divided
 by its token count.
 
-Runs **one forward per ending**, batch size 1, no KV cache — 4 forwards per
+Runs **one forward per ending**, batch size 1, no KV cache: 4 forwards per
 HellaSwag example. The scored span is the **ending tokens only**:
 `losses[len(ctx_ids) - 1:]` picks exactly the positions predicting
 `ids[C] … ids[C+E-1]`. The shared context contributes nothing, which is what makes
 the four scores comparable. See
 [the scoring walkthrough](/docs/evaluation#scoring-one-example).
 
-Not HellaSwag-specific — it scores any set of continuations against a shared
+Not HellaSwag-specific; it scores any set of continuations against a shared
 prefix:
 
 ```python
@@ -181,23 +181,23 @@ uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
 |---|---|---|
 | `--ckpt` | **required** | Checkpoint path |
 | `--tokenizer` | **required** | The tokenizer the model trained on |
-| `--limit` | `1000` | Examples to score — the cost knob (4 forwards each) |
+| `--limit` | `1000` | Examples to score, the cost knob (4 forwards each) |
 | `--device` | auto | `cuda` → `mps` → `cpu` |
 
 Streams HellaSwag's **validation** split (the test labels are not public), encodes
 each ending with a **leading space** (`tok.encode(" " + e)`), skips examples that
 would exceed `cfg.seq_len` without counting them, and reports both metrics every
 100 examples. **No `d26` run has been executed, so the numbers below are
-illustrative of the output format only** — they are not measurements:
+illustrative of the output format only**; they are not measurements:
 
 ```
-# illustrative format — no d26 run exists yet; these are not measured values
+# illustrative format: no d26 run exists yet; these are not measured values
 100: acc 0.2900 | acc_norm 0.3300
 ...
 final (1000 examples): acc 0.2880 | acc_norm 0.3240
 ```
 
-**Requires `datasets`** — imported lazily inside `main`, along with `load_model`,
+**Requires `datasets`**: imported lazily inside `main`, along with `load_model`,
 so importing `ending_losses` costs nothing.
 
 `acc` argmins the **summed** loss; `acc_norm` argmins the **mean**. Quote

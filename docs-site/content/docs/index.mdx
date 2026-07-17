@@ -1,13 +1,13 @@
 ---
 title: tiny-llm
-description: A 489M-parameter decoder-only transformer pretrained from scratch in PyTorch — every layer, the tokenizer, the data pipeline, and the optimizer hand-written
+description: A 489M-parameter decoder-only transformer pretrained from scratch in PyTorch, with the model, tokenizer, data pipeline, and optimizer all implemented in this repo
 ---
 
 `tiny-llm` is a **489,297,408-parameter** decoder-only language model, pretrained
-from scratch on ~10B tokens of FineWeb-Edu. Every piece is hand-written in
-Python/PyTorch: the transformer layers, the byte-level BPE tokenizer, the shard
+from scratch on ~10B tokens of FineWeb-Edu. Every piece is implemented in
+Python/PyTorch in this repo: the transformer layers, the byte-level BPE tokenizer, the shard
 format and sampler, the Muon+AdamW optimizer, and the training loop. There is no
-`transformers` dependency and no pre-built model components — `nn.Linear`,
+`transformers` dependency and no pre-built model components: `nn.Linear`,
 `nn.Embedding`, and `F.scaled_dot_product_attention` are the lowest-level
 primitives used, and even SDPA is checked against a naive reference in the tests.
 
@@ -22,13 +22,13 @@ then the real run is launched on a rented GPU box.
 | Parameters | **489,297,408** total · 447,354,368 non-embedding |
 | Architecture | 26 layers, `d_model` 1280, 20 heads (4 KV heads), SwiGLU `d_ff` 3456 |
 | Context | 2048 tokens, RoPE θ = 10,000 |
-| Vocab | 32,768, byte-level BPE trained by us — 4.517 bytes/token |
+| Vocab | 32,768, byte-level BPE trained by us; 4.517 bytes/token |
 | Training data | ~10B FineWeb-Edu tokens (≈ Chinchilla-optimal for this size) |
 | Optimizer | Muon (hidden matrices) + AdamW (embedding, norms), WSD schedule |
 | Cost of the real run | ≈20 h / **$50-60** on one H100 · ≈2.5 h on 8×H100 |
-| Local dev preset | 13,111,296 params — full loop in ~15 min on an M3 Pro |
+| Local dev preset | 13,111,296 params; full loop in ~15 min on an M3 Pro |
 
-## What is hand-written here
+## What is implemented here
 
 | Component | What it is | Where |
 |---|---|---|
@@ -46,13 +46,13 @@ then the real run is launched on a rented GPU box.
 
 ## Where to start
 
-- **[Getting started](/docs/getting-started)** — install with `uv`, run the test
+- **[Getting started](/docs/getting-started)**: install with `uv`, run the test
   suite, and train the smoke model end to end on your laptop, with real recorded
   numbers from an actual run.
-- **[Architecture](/docs/architecture)** — the full forward pass, the exact
+- **[Architecture](/docs/architecture)**: the full forward pass, the exact
   parameter budget, and a page per component deriving the math and walking the
   real code.
-- **[Training](/docs/training)** — what happens per step, and why Muon
+- **[Training](/docs/training)**: what happens per step, and why Muon
   trains the hidden matrices while AdamW keeps the embedding.
 
 Every page follows the same shape: what the thing is, the math, the actual code

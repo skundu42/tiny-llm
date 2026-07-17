@@ -20,16 +20,21 @@ factual, well-formed pages and drops the SEO spam, boilerplate, and link farms
 that make up much of the raw web.
 
 That trade matters more the smaller the model. At a ~10-billion-token budget you
-cannot out-scale bad data — the model sees each concept only a handful of times,
+cannot out-scale bad data: the model sees each concept only a handful of times,
 so every token should carry as much clean signal as possible. Quality beats
 quantity at this scale, the subset is openly available, and it streams, so
 `prepare_data.py` can consume it without ever downloading the whole thing:
 
 ```python
-ds = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT",
-                  split="train", streaming=True)
-docs = (ex["text"] for ex in ds)
+ds = load_dataset(args.dataset, name=args.dataset_config or None,
+                  split=args.split, streaming=True)
+docs = (ex[args.text_key] for ex in ds)
 ```
+
+The dataset coordinates are CLI flags with FineWeb-Edu defaults
+(`--dataset HuggingFaceFW/fineweb-edu --dataset-config sample-10BT`), so any
+HuggingFace text corpus can stand in; see
+[Train on a custom dataset](/docs/runbooks/custom-dataset).
 
 ## Shard format: uint16 bins plus an index
 
@@ -42,7 +47,7 @@ self.buffer = np.empty(shard_tokens, dtype=np.uint16)
 
 `uint16` is the whole game for on-disk size. The vocabulary is 32,768 tokens
 (see [Tokenizer](/docs/tokenizer)), which fits in 16 bits with room to spare, so
-each token costs exactly **two bytes** — half of what a 32-bit format would use.
+each token costs exactly **two bytes**, half of what a 32-bit format would use.
 A 10-billion-token corpus is therefore ~20 GB on disk instead of ~40 GB, and the
 shards are raw contiguous arrays with no per-token overhead. The writer buffers
 up to `shard_tokens` ids, then flushes a numbered `.bin` file straight to disk:
@@ -57,7 +62,7 @@ def _flush(self) -> None:
     self.fill = 0
 ```
 
-Alongside the shards, a single **`index.json`** records the layout — the dtype
+Alongside the shards, a single **`index.json`** records the layout: the dtype
 and, per split, the ordered list of shard files with their token counts:
 
 ```json
@@ -70,8 +75,8 @@ and, per split, the ordered list of shard files with their token counts:
 }
 ```
 
-Two details are worth calling out. First, the index is written **atomically** —
-to a `.tmp` file, then `os.replace` — so a crash mid-write can never leave a
+Two details are worth calling out. First, the index is written **atomically**
+(to a `.tmp` file, then `os.replace`), so a crash mid-write can never leave a
 half-written index that would corrupt every future read:
 
 ```python
@@ -82,7 +87,7 @@ os.replace(tmp, path)
 ```
 
 Second, `ShardWriter` refuses to re-open a split that already exists in the
-index, so you cannot accidentally append a second `train` on top of an old one —
+index, so you cannot accidentally append a second `train` on top of an old one;
 you get a `ValueError` telling you to use a fresh directory.
 
 ### Documents and the end-of-text separator
@@ -159,7 +164,7 @@ Read it in three moves:
    is chosen with probability `positions / positions.sum()`. This is the subtle
    correctness point: weighting by the number of valid offsets makes **every
    crop position across the entire dataset equally likely**. Choosing a shard
-   uniformly instead would over-sample tokens that live in small shards — a
+   uniformly instead would over-sample tokens that live in small shards: a
    100M-token shard and a 10M-token shard would each get picked half the time,
    badly skewing the mix. Position-weighting makes sampling uniform over the
    token stream, which is what you actually want.
@@ -167,7 +172,7 @@ Read it in three moves:
 3. **Cut, shift, and split.** A uniform offset within the chosen shard reads
    `seq_len + 1` contiguous ids (cast to `int64` for the embedding lookup).
    Slicing `[:, :-1]` and `[:, 1:]` yields the input `x` and the next-token
-   target `y`, offset by one — the standard causal-LM setup. On GPU the transfer
+   target `y`, offset by one: the standard causal-LM setup. On GPU the transfer
    is `non_blocking` to overlap with compute.
 
 Sampling is with replacement and independent per draw. There is no epoch
@@ -195,7 +200,7 @@ and nothing carries over from one step to the next. Four consequences fall out:
 - **Resume needs to save only a step number.** There is no dataloader iterator,
   no shuffle buffer, no epoch pointer, no sampler position to serialize. To
   resume, restore the weights and optimizer state, set `start_step`, and the loop
-  regenerates the *identical* token stream from that step forward — as if it had
+  regenerates the *identical* token stream from that step forward, as if it had
   never stopped. Contrast this with a stateful shuffling `DataLoader`, where
   resuming mid-epoch means faithfully restoring the sampler's internal state,
   something frameworks often get subtly wrong or skip entirely.
@@ -203,13 +208,13 @@ and nothing carries over from one step to the next. Four consequences fall out:
 - **Each rank sees different data, deterministically.** Because `rank` is in the
   seed, the eight replicas of a data-parallel run draw eight disjoint sets of
   crops in the same step, so the global batch is `world × micro_batch_size ×
-  grad_accum` distinct crops with no cross-rank duplication — and it is still
+  grad_accum` distinct crops with no cross-rank duplication, and it is still
   perfectly reproducible.
 
 - **Validation lives in its own namespace.** Evaluation seeds with a fixed
   constant in the rank slot, `np.random.default_rng([tc.seed, 999, k])`, so the
   validation crops are a fixed set that never collides with any training stream
-  and stays constant across evaluations — making val-loss comparisons apples to
+  and stays constant across evaluations, making val-loss comparisons apples to
   apples.
 
 - **One caveat: the world size is baked in.** Because `rank` and `grad_accum`

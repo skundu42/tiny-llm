@@ -1,10 +1,10 @@
 ---
 title: tinyllm.config
-description: ModelConfig, TrainConfig, and the d26/smoke presets — every field, default, and unit
+description: ModelConfig, TrainConfig, and the d26/smoke presets; every field, default, and unit
 ---
 
 Two frozen-in-shape dataclasses and two preset dictionaries. `tinyllm/config.py`
-is 78 lines and holds every tunable number in the project — nothing is
+is 78 lines and holds every tunable number in the project; nothing is
 hardcoded downstream.
 
 ## `ModelConfig`
@@ -23,14 +23,14 @@ class ModelConfig:
     norm_eps: float = 1e-6
 ```
 
-Architecture. The defaults **are** the `d26` preset — 489,297,408 parameters.
+Architecture. The defaults **are** the `d26` preset: 489,297,408 parameters.
 
 | Field | Default | Meaning |
 |---|---|---|
 | `vocab_size` | `32768` | Tokenizer vocabulary. Must match the tokenizer the model trains on. |
 | `n_layer` | `26` | Transformer blocks. |
 | `n_head` | `20` | Query heads. |
-| `n_kv_head` | `4` | Key/value heads — [GQA](/docs/architecture/attention#gqa-why-4-kv-heads). Must divide `n_head`. |
+| `n_kv_head` | `4` | Key/value heads, [GQA](/docs/architecture/attention#gqa-why-4-kv-heads). Must divide `n_head`. |
 | `d_model` | `1280` | Residual-stream width. Must divide evenly by `n_head`. |
 | `d_ff` | `3456` | [SwiGLU](/docs/architecture/swiglu) inner width (≈ `8/3 × d_model`, rounded to a multiple of 128). |
 | `seq_len` | `2048` | Context length. Sizes the RoPE tables and caps generation. |
@@ -50,7 +50,7 @@ def __post_init__(self) -> None:
 Both invariants are structural. `d_model % n_head == 0` makes `head_dim` an
 integer; `n_head % n_kv_head == 0` makes the GQA groups equal-sized, so SDPA's
 `enable_gqa` grouping lines each KV head up with exactly `n_head // n_kv_head`
-query heads. Dataclasses call this automatically on construction — an invalid
+query heads. Dataclasses call this automatically on construction: an invalid
 config fails at the line that creates it, not 200 lines later inside a matmul.
 
 ### `head_dim`
@@ -61,7 +61,7 @@ def head_dim(self) -> int:
     return self.d_model // self.n_head
 ```
 
-**Returns:** `int` — `d_model // n_head`; `1280 // 20 = 64` for `d26`.
+**Returns:** `int`: `d_model // n_head`; `1280 // 20 = 64` for `d26`.
 
 Derived, not stored, so it cannot drift out of sync with the fields it comes from.
 
@@ -112,7 +112,7 @@ class TrainConfig:
     wandb_project: str = ""             # empty = wandb disabled
 ```
 
-Everything about the run. No `__post_init__` — validation happens in
+Everything about the run. No `__post_init__`; validation happens in
 [`run`](/docs/api/train#run), which is where `world_size` is known.
 
 ### Data and batch
@@ -121,7 +121,7 @@ Everything about the run. No `__post_init__` — validation happens in
 |---|---|---|
 | `data_dir` | `"data/fineweb-edu"` | Directory holding `index.json` and the `.bin` shards. |
 | `batch_tokens` | `524_288` | **Tokens per optimizer step, summed across all ranks.** The invariant. |
-| `micro_batch_size` | `8` | Sequences per micro-step **per rank** — the memory knob. |
+| `micro_batch_size` | `8` | Sequences per micro-step **per rank**, the memory knob. |
 
 `grad_accum` is **not a field**. It is derived in `run` as `batch_tokens / (world ×
 micro_batch_size × seq_len)`, so the effective batch stays fixed as you change GPU
@@ -140,11 +140,11 @@ identity](/docs/training#batch-size-and-the-grad-accumulation-identity).
 
 | Field | Default | Meaning |
 |---|---|---|
-| `muon_lr` | `0.02` | [Muon](/docs/training/muon) LR — hidden 2-D matrices. |
+| `muon_lr` | `0.02` | [Muon](/docs/training/muon) LR: hidden 2-D matrices. |
 | `muon_momentum` | `0.95` | Muon's gradient EMA coefficient. |
-| `adamw_lr` | `6e-4` | AdamW LR — embedding and norm gains. |
+| `adamw_lr` | `6e-4` | AdamW LR: embedding and norm gains. |
 | `adamw_betas` | `(0.9, 0.95)` | AdamW moment decays. |
-| `adamw_wd` | `0.1` | Weight decay, **embeddings only** — norm gains get `0.0`. |
+| `adamw_wd` | `0.1` | Weight decay, **embeddings only**; norm gains get `0.0`. |
 | `grad_clip` | `1.0` | Global gradient-norm clip. |
 
 Both LRs are bases: the [WSD schedule](/docs/training#the-wsd-learning-rate-schedule)
@@ -164,10 +164,10 @@ multiplies each by the same `lr_scale(step)`.
 |---|---|---|
 | `out_dir` | `"out/d26"` | Holds `log.csv` and `ckpt_last.pt`. |
 | `log_every` | `10` | Steps between train-loss log lines. |
-| `val_every` | `250` | Steps between validations — fires on `(step + 1) % val_every == 0`. |
+| `val_every` | `250` | Steps between validations; fires on `(step + 1) % val_every == 0`. |
 | `val_batches` | `20` | Micro-batches per validation. `20 × 8 × 2048 = 327,680` tokens. |
 | `ckpt_every` | `1000` | Steps between checkpoint writes. |
-| `sample_every` | `1000` | Steps between sample generations — **only if `--tokenizer` was passed**. |
+| `sample_every` | `1000` | Steps between sample generations, **only if `--tokenizer` was passed**. |
 | `wandb_project` | `""` | W&B project. **Empty disables W&B entirely.** |
 
 ## `MODEL_PRESETS`
@@ -186,7 +186,7 @@ MODEL_PRESETS: dict[str, ModelConfig] = {
 
 Both counts are asserted **exactly** in the test suite. `smoke` keeps
 `vocab_size = 32768`, so it uses the same committed tokenizer and its embedding
-(`32768 × 256 = 8,388,608`) is **64% of its parameters** — which is why a 6-layer
+(`32768 × 256 = 8,388,608`) is **64% of its parameters**, which is why a 6-layer
 model is 13M rather than 5M.
 
 ## `TRAIN_PRESETS`
@@ -222,8 +222,8 @@ TRAIN_PRESETS: dict[str, TrainConfig] = {
 | `val_every` / `val_batches` | 250 / 20 | 100 / 8 |
 | `ckpt_every` / `sample_every` | 1000 / 1000 | 200 / 200 |
 
-Everything else — every optimizer hyperparameter, `grad_clip`, `dtype`, `seed`,
-`decay_frac` — is **identical between the two**. That is deliberate: the
+Everything else (every optimizer hyperparameter, `grad_clip`, `dtype`, `seed`,
+`decay_frac`) is **identical between the two**. That is deliberate: the
 [smoke run](/docs/runbooks/local-smoke) exercises the same optimizer split, the
 same schedule shape, and the same precision policy as the real run.
 
@@ -246,7 +246,7 @@ from tinyllm import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
 mc = MODEL_PRESETS["d26"]
 print(mc.n_layer, mc.head_dim)          # 26 64
 
-# a copy with an override — does not touch the preset
+# a copy with an override; does not touch the preset
 short = replace(TRAIN_PRESETS["d26"], total_steps=100, out_dir="out/probe")
 
 # an entirely custom pair

@@ -1,4 +1,5 @@
-"""Stream FineWeb-Edu, encode with the (verified) fast tokenizer, write shards."""
+"""Stream a HuggingFace dataset (FineWeb-Edu by default), encode with the
+(verified) fast tokenizer, write shards."""
 import argparse
 import itertools
 import os
@@ -17,6 +18,13 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--tokenizer", default="tokenizer/tokenizer.json")
     p.add_argument("--data-dir", default="data/fineweb-edu")
+    p.add_argument("--dataset", default="HuggingFaceFW/fineweb-edu",
+                   help="HuggingFace dataset repo id")
+    p.add_argument("--dataset-config", default="sample-10BT",
+                   help="dataset config name; pass '' for datasets without one")
+    p.add_argument("--split", default="train")
+    p.add_argument("--text-key", default="text",
+                   help="column holding the document text")
     p.add_argument("--val-tokens", type=int, default=10_000_000)
     p.add_argument("--shard-tokens", type=int, default=100_000_000)
     p.add_argument("--max-tokens", type=int, default=0, help="0 = entire subset")
@@ -26,9 +34,9 @@ def main() -> None:
     tok = BPETokenizer.load(args.tokenizer)
     eot = tok.eot_id
 
-    ds = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT",
-                      split="train", streaming=True)
-    docs = (ex["text"] for ex in ds)
+    ds = load_dataset(args.dataset, name=args.dataset_config or None,
+                      split=args.split, streaming=True)
+    docs = (ex[args.text_key] for ex in ds)
 
     fast = None
     if not args.slow:

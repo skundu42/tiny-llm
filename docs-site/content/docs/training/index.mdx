@@ -4,8 +4,8 @@ description: Grad-accumulation math, bf16 autocast, gradient clipping, the WSD s
 ---
 
 The pretraining loop lives in `tinyllm/train.py`. Stripped to its spine it is
-the loop every language model is trained by — sample a batch, forward, backward,
-step, repeat — but the details around that spine are what make it converge
+the loop every language model is trained by (sample a batch, forward, backward,
+step, repeat), but the details around that spine are what make it converge
 efficiently, run on one GPU or many without changing the math, and resume bit
 for bit. This page walks the loop; [Muon](/docs/training/muon),
 [Distributed](/docs/training/distributed), and
@@ -22,7 +22,7 @@ batch_tokens = world_size × micro_batch_size × seq_len × grad_accum
 ```
 
 and for the default `d26` config that is `524,288` tokens (2^19). The loop does
-not read `grad_accum` from config — it *derives* it, so that the effective batch
+not read `grad_accum` from config; it *derives* it, so that the effective batch
 stays constant no matter how many GPUs you throw at the run:
 
 ```python
@@ -44,12 +44,12 @@ Plug in the `d26` numbers (`micro_batch_size = 8`, `seq_len = 2048`):
 
 The point: `batch_tokens` is the invariant, and `grad_accum` flexes to absorb
 the world size. Because the effective batch is identical, so is the loss
-trajectory and so are the tuned hyperparameters — scaling out changes wall-clock,
+trajectory and so are the tuned hyperparameters: scaling out changes wall-clock,
 not the math. The `assert` refuses configs where the split is not clean, so you
 never silently train on a batch that is a few tokens off from what you think.
 
 At the default `total_steps = 19,073`, the run covers
-`19,073 × 524,288 ≈ 10^10` tokens — the ~10B-token budget the `sample-10BT`
+`19,073 × 524,288 ≈ 10^10` tokens, the ~10B-token budget the `sample-10BT`
 FineWeb-Edu subset is sized for.
 
 ## The inner loop
@@ -79,7 +79,7 @@ Reading it line by line:
 
 - **Each micro-batch is drawn from a fresh, seeded RNG.** `(seed, rank, step,
   micro)` fully determines the crop, which is what makes runs reproducible and
-  resume trivial — see [Data](/docs/data).
+  resume trivial; see [Data](/docs/data).
 - **The loss is scaled by `1 / grad_accum` before `backward`.** Gradients
   accumulate additively across micro-steps, so pre-dividing each one makes the
   accumulated gradient the correct *mean* over the full `batch_tokens`, not the
@@ -88,7 +88,7 @@ Reading it line by line:
   inter-GPU gradient communication happens once per optimizer step instead of
   `grad_accum` times. Covered in [Distributed](/docs/training/distributed).
 - **After accumulation:** clip the global gradient norm, step *both* optimizers
-  (Muon and AdamW — see [Muon](/docs/training/muon)), then zero the grads with
+  (Muon and AdamW; see [Muon](/docs/training/muon)), then zero the grads with
   `set_to_none=True` (cheaper than zero-filling, and it frees the buffers).
 
 ## bf16 autocast
@@ -107,13 +107,13 @@ def _autocast_ctx(device: str, dtype: str):
 
 **bf16 is the right low precision here because it shares fp32's 8-bit
 exponent.** That means it covers the same dynamic range as fp32 and simply
-carries fewer mantissa bits, so — unlike fp16 — it does **not** need loss
+carries fewer mantissa bits, so, unlike fp16, it does **not** need loss
 scaling to keep small gradients from underflowing. Matmuls run on tensor cores
 in bf16 for throughput while the master weights stay fp32.
 
 Precision is applied surgically, not globally. Autocast only touches the ops it
 is safe for; the numerically sensitive parts of the model deliberately compute in
-fp32 regardless — `RMSNorm` upcasts to `float()` internally, and the loss is
+fp32 regardless: `RMSNorm` upcasts to `float()` internally, and the loss is
 computed on `logits.float()` through `F.cross_entropy`. So the reductions and the
 softmax that actually need the precision get it, while the big matmuls get the
 speed. The `dtype` is configurable (`auto | bf16 | fp32`); `auto` picks bf16 on
@@ -130,7 +130,7 @@ torch.nn.utils.clip_grad_norm_(raw_model.parameters(), tc.grad_clip)
 
 `grad_clip` defaults to `1.0`, so the global gradient norm is capped at one. This
 is a standard stability guard. Pretraining occasionally hits a batch that
-produces an outsized gradient — a loss spike — and without clipping a single such
+produces an outsized gradient (a loss spike), and without clipping a single such
 step can blow the weights far enough to derail the run. Clipping the *global*
 norm (across all parameters jointly, so their relative directions are preserved)
 caps the update magnitude and lets training ride through spikes. It is applied
@@ -153,8 +153,8 @@ def lr_scale(step: int, total: int, warmup: int, decay_frac: float) -> float:
     return max(1e-8, (total - step) / (total - decay_start))
 ```
 
-Three phases, which trace out a trapezoid — a short ramp up, a long flat top, a
-ramp back down:
+Three phases, which trace out a trapezoid (a short ramp up, a long flat top, a
+ramp back down):
 
 - **Warmup** (first `warmup_steps`, default `250`): a linear ramp from
   `1/warmup` up to `1.0`. Starting the LR near zero and easing in avoids the
@@ -167,7 +167,7 @@ ramp back down:
 
 The characteristic feature versus a cosine schedule is that **flat middle**.
 Because the LR is constant through the stable phase, the schedule does not need
-to know the total length in advance to behave well mid-run — you can train the
+to know the total length in advance to behave well mid-run: you can train the
 plateau as long as you like and only pay the decay at the end. That makes WSD
 convenient for "train until you decide to stop, then anneal," and it lets you
 branch or extend a run without the schedule fighting you.
@@ -195,9 +195,9 @@ Biases):
 tok_s = tc.batch_tokens * tc.log_every / max(now - t_last, 1e-9)
 ```
 
-Throughput is reported in **tokens per second** — total tokens pushed through
+Throughput is reported in **tokens per second**: total tokens pushed through
 since the last log divided by elapsed wall-clock. **Model FLOPs Utilization
-(MFU)** — the fraction of the hardware's peak actually used — is computed
+(MFU)**, the fraction of the hardware's peak actually used, is computed
 inline from it, using the standard transformer FLOPs/token estimate: `6 × N`
 for the matmuls (forward plus backward, `N` = non-embedding parameters) plus
 `12 × n_layer × d_model × seq_len` for attention:
@@ -214,7 +214,7 @@ against `torch.cuda.get_device_name()` by substring:
 PEAK_FLOPS = {"NVIDIA H100": 989e12, "NVIDIA A100": 312e12}
 ```
 
-MFU is only computable **on CUDA, against a recognized GPU** — off CUDA, or on
+MFU is only computable **on CUDA, against a recognized GPU**: off CUDA, or on
 a GPU not in `PEAK_FLOPS`, `peak_flops` is `None` and the loop writes an empty
 `mfu` field rather than guessing. For a ~0.5B-parameter model a well-tuned run
 (compile on, batch large enough to keep the tensor cores fed) generally lands

@@ -1,11 +1,11 @@
-# tiny-llm — a ~500M-parameter LLM pretrained from scratch
+# tiny-llm: a ~500M-parameter LLM pretrained from scratch
 
 **Date:** 2026-07-17
 **Status:** Approved (design), pending spec review
 
 ## Goal
 
-Build a ~500M-parameter decoder-only language model entirely from scratch in Python/PyTorch — model code, tokenizer, data pipeline, optimizer, and training loop, with no HuggingFace `transformers` and no pre-built model components. Development and verification happen locally on an Apple M3 Pro (18 GB); the real pretraining run (~10B tokens, Chinchilla-optimal) targets a rented cloud GPU (single H100 ≈ 20 h ≈ $50–60, or 8×H100 ≈ 2.5 h).
+Build a ~500M-parameter decoder-only language model entirely from scratch in Python/PyTorch: model code, tokenizer, data pipeline, optimizer, and training loop, with no HuggingFace `transformers` and no pre-built model components. Development and verification happen locally on an Apple M3 Pro (18 GB); the real pretraining run (~10B tokens, Chinchilla-optimal) targets a rented cloud GPU (single H100 ≈ 20 h ≈ $50–60, or 8×H100 ≈ 2.5 h).
 
 "Best architecture" is interpreted as the current consensus recipe for strong small dense models (Qwen3-0.6B / OLMo-2 / nanochat lineage), not exotic speedrun tricks.
 
@@ -18,7 +18,7 @@ Build a ~500M-parameter decoder-only language model entirely from scratch in Pyt
 
 ## Model architecture (~489M params)
 
-Decoder-only transformer, every layer hand-written in PyTorch:
+Decoder-only transformer, every layer implemented from scratch in PyTorch:
 
 | Hyperparameter | Value |
 |---|---|
@@ -37,7 +37,7 @@ Decoder-only transformer, every layer hand-written in PyTorch:
 | Biases | None anywhere |
 | Init | normal(0, 0.02); residual output projections scaled by 1/√(2·n_layers) |
 
-Attention uses `F.scaled_dot_product_attention` (FlashAttention kernel) in the model; a hand-written reference attention lives in the test suite and must match SDPA numerically.
+Attention uses `F.scaled_dot_product_attention` (FlashAttention kernel) in the model; a reference attention implementation lives in the test suite and must match SDPA numerically.
 
 Two configs ship as presets: `d26` (the ~489M target above) and `smoke` (~10M params: 6 layers, d_model 256) for local end-to-end verification on MPS/CPU.
 
@@ -71,7 +71,7 @@ Two configs ship as presets: `d26` (the ~489M target above) and `smoke` (~10M pa
 A detailed documentation site lives in `docs-site/` (Next.js + Fumadocs, MDX content, pnpm-managed), documenting the project for readers who want to understand *and reproduce* it:
 
 - **Getting started**: install, quickstart, repo tour.
-- **Architecture**: one page per component — transformer overview, RMSNorm, RoPE, GQA attention + QK-norm, SwiGLU, weight init/tying — each explaining the math, the from-scratch code, and why the design choice is current best practice.
+- **Architecture**: one page per component (transformer overview, RMSNorm, RoPE, GQA attention + QK-norm, SwiGLU, weight init/tying), each explaining the math, the from-scratch code, and why the design choice is current best practice.
 - **Tokenizer**: byte-level BPE theory, training algorithm, regex pre-tokenization, file format.
 - **Data pipeline**: FineWeb-Edu, sharding format, memmap loading.
 - **Training**: Muon + AdamW hybrid (with Newton-Schulz explanation), WSD schedule, bf16/compile, DDP, checkpointing.
@@ -117,8 +117,8 @@ tiny-llm/
 ## Verification strategy
 
 1. **Unit tests** (pytest, run on Mac): everything in `tests/` above.
-2. **Smoke pretrain** (Mac, MPS): `smoke` config on a small prepared shard — loss curve must fall convincingly below its starting value and generations must show learned character/word structure.
-3. **Cloud dress rehearsal**: first 15 minutes of the real config on the GPU box — check tokens/sec, MFU, loss trajectory against expectation before committing to the full run.
+2. **Smoke pretrain** (Mac, MPS): `smoke` config on a small prepared shard; loss curve must fall convincingly below its starting value and generations must show learned character/word structure.
+3. **Cloud dress rehearsal**: first 15 minutes of the real config on the GPU box; check tokens/sec, MFU, loss trajectory against expectation before committing to the full run.
 4. **Full run acceptance**: final val loss ≈ 2.7–3.0 (typical for this scale/recipe on FineWeb-Edu), HellaSwag above random (>0.28), and qualitatively coherent short generations.
 
 ## Cloud runbook (README)
@@ -146,7 +146,7 @@ review work happened.
 - **Validation holdout is the *first* `--val-tokens`, not the last shard.**
   §"Data pipeline" above says "last shard held out as validation." The shipped
   `scripts/prepare_data.py` instead routes tokens to the validation writer
-  first — `w = val_w if val_w.total_written < args.val_tokens else train_w` —
+  first (`w = val_w if val_w.total_written < args.val_tokens else train_w`)
   and only switches to the train writer once the validation quota is met.
   Functionally equivalent for a single streamed, shuffled-at-source corpus
   consumed once (either way validation is a token-count-bounded, non-overlapping
@@ -154,18 +154,18 @@ review work happened.
   what the code actually does.
 - **Shipped AdamW LR is `6e-4`, not `≈3e-4`.** §"Optimizer & training recipe"
   above says "AdamW LR ≈ 3e-4; exact values tuned on the smoke config." The
-  value that shipped in `tinyllm/config.py`'s `TrainConfig.adamw_lr` — and that
+  value that shipped in `tinyllm/config.py`'s `TrainConfig.adamw_lr` (and that
   the smoke run in `docs/superpowers/specs/smoke-results.md` was actually
-  measured against — is `6e-4`. The plan's own caveat ("exact values tuned on
+  measured against) is `6e-4`. The plan's own caveat ("exact values tuned on
   the smoke config") anticipated this drift; this note just records where it
   landed.
 - **MFU logging is implemented.** §"Optimizer & training recipe" lists "MFU
   estimate" as a logging requirement; at the time of the smoke run it was not
   yet wired up (`train.py` only shipped a `PEAK_FLOPS` reference constant for
   computing it offline). It is now computed inline in `tinyllm/train.py`'s
-  master-rank logging branch — `flops_per_token = 6*N + 12*n_layer*d_model*
+  master-rank logging branch (`flops_per_token = 6*N + 12*n_layer*d_model*
   seq_len`, `mfu = flops_per_token * tok_s / peak_flops` where `peak_flops` is
-  looked up from `PEAK_FLOPS` by matching `torch.cuda.get_device_name()` — and
+  looked up from `PEAK_FLOPS` by matching `torch.cuda.get_device_name()`) and
   logged as an `mfu` column in `log.csv`, in the stdout step line, and to
   Weights & Biases, written as an empty value when not computable (off CUDA,
   or an unrecognized GPU).

@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install with uv, run the test suite, and train the smoke model end to end on a laptop — with the numbers from a real run
+description: Install with uv, run the test suite, and train the smoke model end to end on a laptop, with the numbers from a real run
 ---
 
 Everything in this repo runs on a laptop. The test suite needs no downloaded data
@@ -48,7 +48,7 @@ budget produces a usable one in a few minutes:
 uv run python scripts/train_tokenizer.py --max-bytes 20_000_000
 ```
 
-The canonical tokenizer — the one used for the real run — is trained on a much
+The canonical tokenizer (the one used for the real run) is trained on a much
 larger sample and is what the numbers below use:
 
 ```bash
@@ -74,7 +74,7 @@ uv run python scripts/prepare_data.py --data-dir data/smoke \
 This is the exact command that produced the corpus every number on this page was
 measured against. It streams FineWeb-Edu, encodes it with the tokenizer
 (`--tokenizer` defaults to `tokenizer/tokenizer.json`), and writes uint16 token
-shards plus a JSON index — validation shards filled first, then train.
+shards plus a JSON index: validation shards filled first, then train.
 
 The recorded result: **60,003,098 tokens across 5 shards**, 2,004,611 validation
 and 57,998,487 train.
@@ -90,8 +90,8 @@ and 57,998,487 train.
 You can read the flags straight off that table. `--val-tokens 2000000` fills
 `val_00000.bin` to exactly 2,000,000; `--shard-tokens 25000000` caps each shard
 at 25M, so train rolls over twice; `--max-tokens 60000000` stops the stream at
-60M. The small overshoots — 4,611 val tokens spilling into a second shard, and
-60,003,098 total against a 60,000,000 request — are the writer finishing the
+60M. The small overshoots (4,611 val tokens spilling into a second shard, and
+60,003,098 total against a 60,000,000 request) are the writer finishing the
 document it is in rather than truncating mid-document. Details in
 [Data](/docs/data).
 
@@ -102,62 +102,62 @@ uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.js
 ```
 
 The `smoke` preset (`tinyllm/config.py`) is 6 layers, `d_model` 256, 4 heads / 2
-KV heads, `d_ff` 768, context 512 — **13,111,296 parameters** — trained for 600
+KV heads, `d_ff` 768, context 512 (**13,111,296 parameters**), trained for 600
 steps at 16,384 tokens per step with a 20-step warmup. `torch.compile` is
 disabled automatically off CUDA and precision falls back to fp32, so no flags are
 needed on a Mac.
 
 Progress goes to stdout and to `out/smoke/log.csv` (`step, split, loss, lr_scale,
-tok_per_sec, mfu` — `mfu` is only populated on CUDA against a recognized GPU;
+tok_per_sec, mfu`; `mfu` is only populated on CUDA against a recognized GPU;
 on Apple Silicon it is always empty); checkpoints land in
 `out/smoke/ckpt_last.pt`.
 
 ### What a real run looks like
 
 These are measured numbers from a complete `smoke` run on an **Apple M3 Pro
-(MPS)** — the full 600-step schedule, straight from `out/smoke/log.csv`:
+(MPS)**: the full 600-step schedule, straight from `out/smoke/log.csv`:
 
 | Step | Train loss | Validation loss |
 |---|---|---|
-| 0 | 10.44 | — |
-| 99 | — | 6.73 |
-| 100 | 6.69 | — |
-| 199 | — | 6.26 |
-| 200 | 6.16 | — |
-| 299 | — | 5.97 |
-| 300 | 5.89 | — |
-| 399 | — | 5.78 |
-| 499 | — | 5.62 |
+| 0 | 10.44 | |
+| 99 | | 6.73 |
+| 100 | 6.69 | |
+| 199 | | 6.26 |
+| 200 | 6.16 | |
+| 299 | | 5.97 |
+| 300 | 5.89 | |
+| 399 | | 5.78 |
+| 499 | | 5.62 |
 | 599 (final) | 5.53 | **5.50** |
 
 Throughput held around **13,000 tokens/sec** (median 12,781 over steps 10-599),
-putting the full 600 steps — 600 × 16,384 = **9,830,400 tokens** — at roughly
+putting the full 600 steps (600 × 16,384 = **9,830,400 tokens**) at roughly
 **13-15 minutes**.
 
 The single most informative number is the first one. **The initial loss is
 10.44**, and `ln(32768) = 10.40`. A model that has learned nothing should assign
 uniform probability `1/vocab_size` to every token, giving a cross-entropy of
 exactly `ln(vocab_size)`. Landing within 0.04 of it says the
-[initialization](/docs/architecture/embeddings-and-init) is correct — the logits
+[initialization](/docs/architecture/embeddings-and-init) is correct: the logits
 start near-uniform rather than confidently wrong, which is what the 0.02 init and
 the 1/√(2L) residual scaling are for. This is asserted in the test suite too
 (`test_forward_loss_near_uniform_at_init`).
 
 From there train loss falls steeply and **validation loss tracks it down all the
 way** (6.73 → 6.26 → 5.97 → 5.78 → 5.62 → 5.50) with no divergence, and at the
-end val (5.50) sits just *below* train (5.53) — no overfitting, which is exactly
+end val (5.50) sits just *below* train (5.53): no overfitting, which is exactly
 what you expect when the model consumes 9.8M tokens out of a 58M-token training
 split: under a fifth of an epoch, so no example is ever seen twice and train and
 val are equally unfamiliar. That curve is the real deliverable: the loop, the sampler, the
 optimizer split, and the LR schedule are all wired up correctly.
 
 The point of the smoke run is that **every component works end to end**, not that
-the result is good — though at 13M params it does learn real English. See the
+the result is good, though at 13M params it does learn real English. See the
 samples below.
 
 <Callout type="info">
   Loss is a per-token cross-entropy in nats. 5.50 nats ≈ a perplexity of ~245
-  over a 32,768-token vocab — a long way from a real model, but the run is only
+  over a 32,768-token vocab, a long way from a real model, but the run is only
   ~0.1% of the token budget the `d26` run gets.
 </Callout>
 
@@ -183,8 +183,8 @@ And with `--prompt "Photosynthesis is" --seed 2`:
 > The most common number of people is about 1.
 
 This is a fair picture of what 13.1M parameters and ~9.8M tokens buys. The model
-has learned **English morphology, syntax, punctuation, and quotation formatting**
-— these are grammatical, fluent sentences, not word salad. It has **not** learned
+has learned **English morphology, syntax, punctuation, and quotation formatting**:
+these are grammatical, fluent sentences, not word salad. It has **not** learned
 factual grounding: photosynthesis is not a disease. That split is exactly what
 this scale and token budget predict, and it is why the real run is
 [489M parameters over 10B tokens](/docs/architecture) rather than this.
@@ -207,12 +207,12 @@ uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
 | 1× H100 | ≈20 h | ≈$50-60 (at $2.5-3/h) |
 | 8× H100 (DDP) | ≈2.5 h | similar total spend |
 
-Single-GPU is the degenerate case of the same DDP code path — see
+Single-GPU is the degenerate case of the same DDP code path; see
 [Distributed training](/docs/training/distributed). Run it in `tmux`, and if the
 box dies, `--resume` picks up
 [bit-exactly](/docs/training/checkpointing) from the last atomic checkpoint.
 
 ## Next
 
-- [Architecture](/docs/architecture) — the forward pass and the parameter budget.
-- [The training loop](/docs/training) — what each step actually does.
+- [Architecture](/docs/architecture): the forward pass and the parameter budget.
+- [The training loop](/docs/training): what each step actually does.
