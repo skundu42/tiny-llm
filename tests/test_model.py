@@ -153,8 +153,8 @@ def test_forward_loss_near_uniform_at_init():
     torch.manual_seed(0)
     cfg = _small_cfg()
     model = TinyLLM(cfg)
-    x = torch.randint(0, cfg.vocab_size, (2, 16))
-    logits, loss = model(x, targets=x)
+    x = torch.randint(0, cfg.vocab_size, (2, 17))
+    logits, loss = model(x[:, :-1], targets=x[:, 1:])
     assert logits.shape == (2, 16, cfg.vocab_size)
     assert abs(loss.item() - math.log(cfg.vocab_size)) < 1.0
 
@@ -194,9 +194,9 @@ def test_generate_respects_eos():
     model = TinyLLM(cfg).eval()
     prompt = torch.randint(0, cfg.vocab_size, (1, 3))
     greedy = model.generate(prompt.clone(), max_new_tokens=10, temperature=0.0)
-    eos = greedy[0, 4].item()  # force an early stop at the 2nd generated token
+    eos = greedy[0, 3].item()  # first generated token
     out = model.generate(prompt.clone(), max_new_tokens=10, temperature=0.0, eos_id=eos)
-    assert out.shape[1] == 5
+    assert out.shape[1] == 4  # stops immediately after emitting eos
 
 
 def test_residual_projections_scaled_init():
