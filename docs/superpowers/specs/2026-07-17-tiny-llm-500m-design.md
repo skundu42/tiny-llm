@@ -66,6 +66,21 @@ Two configs ship as presets: `d26` (the ~489M target above) and `smoke` (~10M pa
 - Logging: CSV always; wandb optional behind a flag. Periodic val loss, tokens/sec, MFU estimate, and sample generations.
 - Distributed: plain DDP via `torchrun`; single-GPU is the degenerate case of the same code path. No FSDP (unnecessary at 500M).
 
+## Documentation site (Fumadocs)
+
+A detailed documentation site lives in `docs-site/` (Next.js + Fumadocs, MDX content, pnpm-managed), documenting the project for readers who want to understand *and reproduce* it:
+
+- **Getting started**: install, quickstart, repo tour.
+- **Architecture**: one page per component — transformer overview, RMSNorm, RoPE, GQA attention + QK-norm, SwiGLU, weight init/tying — each explaining the math, the from-scratch code, and why the design choice is current best practice.
+- **Tokenizer**: byte-level BPE theory, training algorithm, regex pre-tokenization, file format.
+- **Data pipeline**: FineWeb-Edu, sharding format, memmap loading.
+- **Training**: Muon + AdamW hybrid (with Newton-Schulz explanation), WSD schedule, bf16/compile, DDP, checkpointing.
+- **Evaluation & inference**: val loss, HellaSwag, KV-cache generation.
+- **Runbooks**: local smoke train on Apple Silicon; full cloud pretrain (provisioning → data prep → launch → monitoring → cost).
+- **API reference**: per-module reference for `tinyllm/*`.
+
+Verification: `pnpm build` must succeed (static export not required; default Next build), all internal links valid, code snippets in docs lifted from the real source.
+
 ## Evaluation & generation
 
 - Val loss / perplexity on the held-out FineWeb-Edu shard.
