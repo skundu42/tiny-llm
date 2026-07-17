@@ -142,14 +142,3 @@ Steps on a fresh Ubuntu GPU box (Lambda Labs, RunPod, etc.):
    uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --limit 1000
    uv run python -m tinyllm.sample --ckpt out/d26/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"
    ```
-
-## Documentation site
-
-A more detailed, browsable writeup (architecture deep-dives, tokenizer theory, training internals, runbooks, and a per-module API reference) lives in `docs-site/` (a Fumadocs/Next.js site, MDX content, pnpm-managed):
-
-```bash
-cd docs-site
-pnpm install
-pnpm dev      # local preview
-pnpm build    # static build
-```
