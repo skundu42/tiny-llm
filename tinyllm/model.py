@@ -46,3 +46,57 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
     sin = sin[None, None, :, :]
     out = torch.cat((x1 * cos - x2 * sin, x1 * sin + x2 * cos), dim=-1)
     return out.to(x.dtype)
+
+
+class KVCache:
+    """Preallocated per-layer K/V cache for autoregressive decoding.
+
+    After the initial multi-token prefill, decode one token per forward call:
+    the attention path masks nothing when q_len < k_len, which is only correct
+    when the query tokens are the newest positions.
+    """
+
+    def __init__(self, n_layer, batch_size, n_kv_head, max_seq_len, head_dim, device, dtype):
+        self.k = torch.zeros(n_layer, batch_size, n_kv_head, max_seq_len, head_dim,
+                             device=device, dtype=dtype)
+        self.v = torch.zeros_like(self.k)
+        self.pos = 0
+
+    def update(self, layer: int, k: torch.Tensor, v: torch.Tensor):
+        t = k.size(2)
+        self.k[layer, :, :, self.pos : self.pos + t] = k
+        self.v[layer, :, :, self.pos : self.pos + t] = v
+        return self.k[layer, :, :, : self.pos + t], self.v[layer, :, :, : self.pos + t]
+
+    def advance(self, t: int) -> None:
+        self.pos += t
+
+
+class Attention(nn.Module):
+    def __init__(self, cfg: ModelConfig, layer_idx: int) -> None:
+        super().__init__()
+        self.layer_idx = layer_idx
+        self.n_head, self.n_kv_head, self.head_dim = cfg.n_head, cfg.n_kv_head, cfg.head_dim
+        self.wq = nn.Linear(cfg.d_model, cfg.n_head * cfg.head_dim, bias=False)
+        self.wk = nn.Linear(cfg.d_model, cfg.n_kv_head * cfg.head_dim, bias=False)
+        self.wv = nn.Linear(cfg.d_model, cfg.n_kv_head * cfg.head_dim, bias=False)
+        self.wo = nn.Linear(cfg.n_head * cfg.head_dim, cfg.d_model, bias=False)
+        self.q_norm = RMSNorm(cfg.head_dim, cfg.norm_eps)
+        self.k_norm = RMSNorm(cfg.head_dim, cfg.norm_eps)
+
+    def forward(self, x, cos, sin, cache: "KVCache | None" = None) -> torch.Tensor:
+        B, T, _ = x.shape
+        q = self.wq(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        k = self.wk(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
+        v = self.wv(x).view(B, T, self.n_kv_head, self.head_dim).transpose(1, 2)
+        q, k = self.q_norm(q), self.k_norm(k)
+        q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
+        if cache is not None:
+            k, v = cache.update(self.layer_idx, k, v)
+        rep = self.n_head // self.n_kv_head
+        if rep > 1:
+            k = k.repeat_interleave(rep, dim=1)
+            v = v.repeat_interleave(rep, dim=1)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=q.size(2) == k.size(2))
+        y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.head_dim)
+        return self.wo(y)
