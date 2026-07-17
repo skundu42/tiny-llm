@@ -58,6 +58,9 @@ def main() -> None:
         n += 1
         if n % 100 == 0:
             print(f"{n}: acc {acc / n:.4f} | acc_norm {acc_norm / n:.4f}")
+    if n == 0:
+        print("no examples evaluated")
+        return
     print(f"final ({n} examples): acc {acc / n:.4f} | acc_norm {acc_norm / n:.4f}")
 
 
