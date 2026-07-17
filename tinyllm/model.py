@@ -49,11 +49,11 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
 
 
 class KVCache:
-    """Preallocated per-layer K/V cache for autoregressive decoding.
-
-    After the initial multi-token prefill, decode one token per forward call:
-    the attention path masks nothing when q_len < k_len, which is only correct
-    when the query tokens are the newest positions.
+    """Preallocated per-layer K/V cache for autoregressive decoding. Usage
+    contract: one multi-token prefill from an empty cache (pos == 0), then
+    exactly one token per forward call. A multi-token forward with pos > 0
+    would attend without any causal mask and leak future tokens within the
+    chunk; Attention asserts against it.
     """
 
     def __init__(self, n_layer, batch_size, n_kv_head, max_seq_len, head_dim, device, dtype):
@@ -92,6 +92,9 @@ class Attention(nn.Module):
         q, k = self.q_norm(q), self.k_norm(k)
         q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
         if cache is not None:
+            assert T == 1 or cache.pos == 0, (
+                "chunked prefill unsupported: q_len > 1 requires an empty cache"
+            )
             k, v = cache.update(self.layer_idx, k, v)
         rep = self.n_head // self.n_kv_head
         if rep > 1:
