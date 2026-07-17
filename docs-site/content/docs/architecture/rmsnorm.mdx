@@ -110,7 +110,7 @@ return (x * self.weight.float()).to(dtype)
 ```
 
 Remember the number this must not corrupt. Training runs under **bf16 autocast**
-([details](/docs/training/index)), so `x` arrives as bfloat16 — which has an
+([details](/docs/training)), so `x` arrives as bfloat16 — which has an
 8-bit exponent (the same enormous range as fp32) but only **7 mantissa bits**,
 i.e. roughly 2-3 decimal digits of precision.
 
@@ -143,7 +143,7 @@ This costs essentially nothing. Normalization is bandwidth-bound, not
 compute-bound; the fp32 arithmetic is free relative to the memory traffic, and
 the upcast happens on data already in registers. It is the standard trick — the
 same reason [cross-entropy is computed in
-fp32](/docs/architecture/index#the-forward-pass) at the end of the forward pass.
+fp32](/docs/architecture#the-forward-pass) at the end of the forward pass.
 
 `test_rmsnorm_dtype_preserved` pins the contract:
 

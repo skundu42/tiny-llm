@@ -39,7 +39,7 @@ then the real run is launched on a rented GPU box.
 | [Embeddings & init](/docs/architecture/embeddings-and-init) | Tied input/output, 0.02 init, 1/√(2L) residual scaling | `tinyllm/model.py` |
 | [Tokenizer](/docs/tokenizer) | Byte-level BPE, trained on 250 MB of FineWeb-Edu | `tinyllm/tokenizer.py` |
 | [Data pipeline](/docs/data) | uint16 shards, memmapped random-crop sampler, stateless RNG | `tinyllm/data.py` |
-| [Training loop](/docs/training/index) | Grad accumulation, bf16 autocast, WSD schedule | `tinyllm/train.py` |
+| [Training loop](/docs/training) | Grad accumulation, bf16 autocast, WSD schedule | `tinyllm/train.py` |
 | [Muon](/docs/training/muon) | Newton-Schulz orthogonalized momentum | `tinyllm/muon.py` |
 | [Distributed](/docs/training/distributed) | Plain DDP via `torchrun`, `no_sync` accumulation | `tinyllm/train.py` |
 | [Checkpointing](/docs/training/checkpointing) | Atomic writes, bit-exact resume | `tinyllm/train.py` |
@@ -52,7 +52,7 @@ then the real run is launched on a rented GPU box.
 - **[Architecture](/docs/architecture)** — the full forward pass, the exact
   parameter budget, and a page per component deriving the math and walking the
   real code.
-- **[Training](/docs/training/index)** — what happens per step, and why Muon
+- **[Training](/docs/training)** — what happens per step, and why Muon
   trains the hidden matrices while AdamW keeps the embedding.
 
 Every page follows the same shape: what the thing is, the math, the actual code

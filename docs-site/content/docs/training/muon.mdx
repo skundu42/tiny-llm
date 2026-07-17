@@ -189,6 +189,6 @@ The three buckets:
 
 The split is why `build_optimizers` returns **two** optimizers that the training
 loop steps together. Finally, each parameter group's `lr` is snapshotted into
-`initial_lr`, which is what the [WSD schedule](/docs/training/index) scales every
+`initial_lr`, which is what the [WSD schedule](/docs/training) scales every
 step — so Muon's `0.02` and AdamW's `6e-4` both ride the same warmup, plateau,
 and decay curve off their own bases.

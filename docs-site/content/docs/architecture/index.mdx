@@ -219,7 +219,7 @@ def num_params(self, non_embedding: bool = False) -> int:
 
 The non-embedding count is the one that matters for scaling laws and for the
 `6·N·tokens` FLOPs estimate used in the [MFU
-calculation](/docs/training/index) — the embedding is a lookup, not a matmul, so
+calculation](/docs/training) — the embedding is a lookup, not a matmul, so
 it contributes no FLOPs on the input side.
 
 ## Read next

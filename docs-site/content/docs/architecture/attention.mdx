@@ -135,9 +135,11 @@ entire cache must be streamed from HBM to compute the scores. Shrinking the cach
 costs measurable perplexity — the heads lose their ability to attend to
 genuinely different things — and it destabilizes training. GQA was introduced
 (Ainslie et al., 2023) precisely as the interpolation that keeps nearly all of
-MHA's quality at close to MQA's memory. **4 KV heads at 20 query heads** is a
-mainstream ratio (Llama 2 70B and Llama 3 use 8 KV heads at 64 query heads), and
-it divides 20 evenly, which `ModelConfig.__post_init__` requires.
+MHA's quality at close to MQA's memory. **4 KV heads at 20 query heads** — a 5:1
+sharing ratio — sits in the mainstream band: Llama 2 70B and Llama 3 70B use 8 KV
+heads at 64 query heads (8:1), while Llama 3 8B uses 8 KV heads at 32 query heads
+(4:1). Ours falls between the two, and 4 divides 20 evenly, which
+`ModelConfig.__post_init__` requires.
 
 ## QK-norm
 

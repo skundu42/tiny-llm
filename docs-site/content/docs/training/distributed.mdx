@@ -104,7 +104,7 @@ torchrun --standalone --nproc_per_node=8 -m tinyllm.train --config d26
 ```
 
 Now `world = 8` and `grad_accum` drops to `2`, but `batch_tokens` is still
-524,288 — the [grad-accumulation identity](/docs/training/index) holds the
+524,288 — the [grad-accumulation identity](/docs/training) holds the
 effective batch constant while the eight ranks share the work. Multi-node runs
 are the same picture with `torchrun`'s rendezvous arguments across hosts. Because
 the effective batch, the schedule, and the per-`(rank, step)` data are all
