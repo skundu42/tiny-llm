@@ -28,10 +28,11 @@ def save(self, path: str) -> None:
 Four fields, and only two of them carry real information:
 
 - **`version`** — a schema version, so the loader can evolve.
-- **`pattern`** — the exact pre-tokenization regex. Storing it makes the file
-  self-contained: the split used at encode time is guaranteed to be the one the
-  merges were trained against, not whatever the current source code happens to
-  say.
+- **`pattern`** — the exact pre-tokenization regex the merges were trained
+  against. `load` checks it against today's `SPLIT_PATTERN` and raises
+  `ValueError` on a mismatch (see below) — so a tokenizer saved under a
+  different pattern fails loudly at load time instead of silently mis-encoding
+  every input under the wrong split.
 - **`merges`** — the ordered list of merges, each a `[a, b]` pair of **integer
   ids**. This is the entire learned model. Note what is *not* stored: the
   expanded byte strings of each token. Because token `256 + i` is by definition
@@ -49,12 +50,27 @@ Loading is the mirror image, and rebuilding the vocab from merges happens in
 def load(cls, path: str) -> "BPETokenizer":
     with open(path) as f:
         data = json.load(f)
+    pattern = data.get("pattern")
+    if pattern is not None and pattern != SPLIT_PATTERN:
+        raise ValueError(
+            "tokenizer was saved with a different pre-tokenization pattern; "
+            "loading it under today's SPLIT_PATTERN would silently mis-encode. "
+            f"saved: {pattern!r} current: {SPLIT_PATTERN!r}"
+        )
     return cls([tuple(m) for m in data["merges"]], data["special_tokens"])
 ```
 
 The constructor calls `_build`, which reconstructs `merge_ranks`, the full
 `vocab` (bytes `0`–`255` plus one entry per merge), and the reverse
 special-token map. Nothing else needs to be persisted.
+
+The pattern check only fires when `"pattern"` is present and differs — a file
+saved without the field (or with it `null`) loads unchanged, so old saved
+tokenizers are not broken retroactively. This closes what was previously a
+silent-corruption trap: `pattern` was written on save but never read back, so
+a tokenizer saved under a since-changed `SPLIT_PATTERN` would reload
+"successfully" and mis-encode every input against merges trained on a
+different split — wrong, but with no error to signal it.
 
 ## Decoding is always lossless
 

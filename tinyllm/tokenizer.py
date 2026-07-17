@@ -208,6 +208,13 @@ class BPETokenizer:
     def load(cls, path: str) -> "BPETokenizer":
         with open(path) as f:
             data = json.load(f)
+        pattern = data.get("pattern")
+        if pattern is not None and pattern != SPLIT_PATTERN:
+            raise ValueError(
+                "tokenizer was saved with a different pre-tokenization pattern; "
+                "loading it under today's SPLIT_PATTERN would silently mis-encode. "
+                f"saved: {pattern!r} current: {SPLIT_PATTERN!r}"
+            )
         return cls([tuple(m) for m in data["merges"]], data["special_tokens"])
 
     # ------------------------------------------------------------ fast export

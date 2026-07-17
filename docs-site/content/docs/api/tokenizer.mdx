@@ -3,7 +3,7 @@ title: tinyllm.tokenizer
 description: BPETokenizer — training, encode/decode, persistence, and the verified fast export, with exact signatures
 ---
 
-A byte-level BPE tokenizer written from scratch in 241 lines:
+A byte-level BPE tokenizer written from scratch in 248 lines:
 `tinyllm/tokenizer.py`. No `tokenizers` dependency on the critical path — the HF
 library appears only in `export_fast`, as an accelerator that must prove itself
 against this implementation before it is trusted. See
@@ -36,7 +36,9 @@ The comment above it in source explains the one deliberate deviation:
 
 That substitution is what makes `export_fast` able to agree token-for-token.
 Saved into `tokenizer.json` so a loaded tokenizer records the pattern it was
-trained with. See [Tokenizer training](/docs/tokenizer/training).
+trained with — and `load` checks it against today's `SPLIT_PATTERN`, raising
+rather than mis-encoding if they differ (see [`load`](#load) below). See
+[Tokenizer training](/docs/tokenizer/training).
 
 ### `ENDOFTEXT`
 
@@ -224,15 +226,21 @@ def load(cls, path: str) -> "BPETokenizer":
     ...
 ```
 
-**Args:** `path`. **Returns:** `BPETokenizer`.
+**Args:** `path`. **Returns:** `BPETokenizer`. **Raises:** `ValueError` if the
+file's `"pattern"` is present and does not match today's `SPLIT_PATTERN`.
 
 JSON turns tuples into lists, so merges are re-tupled on the way in
 (`[tuple(m) for m in data["merges"]]`) — `merge_ranks` is keyed by tuple and lists
 are unhashable.
 
-Note `"pattern"` is saved but **not read back**: the module-level `SPLIT_PATTERN`
-is always used. The field is a record of what produced the merges, useful for
-detecting a mismatch by hand.
+`"pattern"` **is now validated**, not just recorded: if `data.get("pattern")` is
+present and differs from the module-level `SPLIT_PATTERN`, `load` raises rather
+than silently reloading under today's pattern. A tokenizer saved under a
+different `SPLIT_PATTERN` would otherwise load "successfully" and mis-encode
+every input — the merges are byte-pair ids trained against a specific
+pre-tokenization, and pre-tokenizing differently changes which words see which
+merges. Files with no `"pattern"` key (or `null`) load unchanged, for
+compatibility with tokenizers saved before this field existed.
 
 ### `export_fast`
 

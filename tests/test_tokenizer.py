@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from tinyllm.tokenizer import ENDOFTEXT, BPETokenizer
@@ -71,6 +73,18 @@ def test_save_load_roundtrip(tok, tmp_path):
     assert tok2.special_tokens == tok.special_tokens
     s = "The quick brown fox! 🌍"
     assert tok2.encode(s) == tok.encode(s)
+
+
+def test_load_rejects_tampered_pattern(tok, tmp_path):
+    p = str(tmp_path / "tok.json")
+    tok.save(p)
+    with open(p) as f:
+        data = json.load(f)
+    data["pattern"] = data["pattern"] + "EXTRA"  # simulate a different SPLIT_PATTERN
+    with open(p, "w") as f:
+        json.dump(data, f)
+    with pytest.raises(ValueError):
+        BPETokenizer.load(p)
 
 
 def test_min_word_freq_filters_rare_words():
