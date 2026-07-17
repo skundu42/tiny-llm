@@ -103,3 +103,116 @@ class Attention(nn.Module):
         y = F.scaled_dot_product_attention(q, k, v, is_causal=q.size(2) == k.size(2))
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_head * self.head_dim)
         return self.wo(y)
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, cfg: ModelConfig) -> None:
+        super().__init__()
+        self.w_gate = nn.Linear(cfg.d_model, cfg.d_ff, bias=False)
+        self.w_up = nn.Linear(cfg.d_model, cfg.d_ff, bias=False)
+        self.w_down = nn.Linear(cfg.d_ff, cfg.d_model, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))
+
+
+class Block(nn.Module):
+    def __init__(self, cfg: ModelConfig, layer_idx: int) -> None:
+        super().__init__()
+        self.attn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
+        self.attn = Attention(cfg, layer_idx)
+        self.mlp_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
+        self.mlp = SwiGLU(cfg)
+
+    def forward(self, x, cos, sin, cache: KVCache | None = None) -> torch.Tensor:
+        x = x + self.attn(self.attn_norm(x), cos, sin, cache)
+        x = x + self.mlp(self.mlp_norm(x))
+        return x
+
+
+class TinyLLM(nn.Module):
+    def __init__(self, cfg: ModelConfig) -> None:
+        super().__init__()
+        self.cfg = cfg
+        self.embed = nn.Embedding(cfg.vocab_size, cfg.d_model)
+        self.blocks = nn.ModuleList(Block(cfg, i) for i in range(cfg.n_layer))
+        self.final_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
+        self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+        self.lm_head.weight = self.embed.weight  # weight tying
+        cos, sin = precompute_rope(cfg.head_dim, cfg.seq_len, cfg.rope_theta)
+        self.register_buffer("rope_cos", cos, persistent=False)
+        self.register_buffer("rope_sin", sin, persistent=False)
+        self.apply(self._init_weights)
+        std = 0.02 / math.sqrt(2 * cfg.n_layer)
+        for block in self.blocks:
+            nn.init.normal_(block.attn.wo.weight, mean=0.0, std=std)
+            nn.init.normal_(block.mlp.w_down.weight, mean=0.0, std=std)
+
+    @staticmethod
+    def _init_weights(module: nn.Module) -> None:
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def num_params(self, non_embedding: bool = False) -> int:
+        n = sum(p.numel() for p in self.parameters())
+        if non_embedding:
+            n -= self.embed.weight.numel()
+        return n
+
+    def forward(self, idx, targets=None, cache: KVCache | None = None):
+        B, T = idx.shape
+        pos0 = cache.pos if cache is not None else 0
+        cos = self.rope_cos[pos0 : pos0 + T]
+        sin = self.rope_sin[pos0 : pos0 + T]
+        x = self.embed(idx)
+        for block in self.blocks:
+            x = block(x, cos, sin, cache)
+        if cache is not None:
+            cache.advance(T)
+        x = self.final_norm(x)
+        if targets is not None:
+            logits = self.lm_head(x)
+            loss = F.cross_entropy(
+                logits.float().view(-1, logits.size(-1)),
+                targets.reshape(-1),
+                ignore_index=-1,
+            )
+            return logits, loss
+        if cache is not None:
+            return self.lm_head(x[:, -1:, :]), None
+        return self.lm_head(x), None
+
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None, eos_id=None):
+        self.eval()
+        B, T = idx.shape
+        total = T + max_new_tokens
+        assert total <= self.cfg.seq_len, "generation would exceed context length"
+        cache = KVCache(
+            self.cfg.n_layer, B, self.cfg.n_kv_head, total, self.cfg.head_dim,
+            idx.device, self.embed.weight.dtype,
+        )
+        logits, _ = self(idx, cache=cache)
+        for _ in range(max_new_tokens):
+            logits_last = logits[:, -1, :]
+            if temperature == 0.0:
+                next_tok = logits_last.argmax(-1, keepdim=True)
+            else:
+                logits_last = logits_last / temperature
+                if top_k is not None:
+                    kth = torch.topk(logits_last, min(top_k, logits_last.size(-1))).values[:, -1:]
+                    logits_last = logits_last.masked_fill(logits_last < kth, float("-inf"))
+                if top_p is not None:
+                    sorted_logits, sorted_idx = torch.sort(logits_last, descending=True)
+                    probs = F.softmax(sorted_logits, dim=-1)
+                    mask = probs.cumsum(-1) - probs > top_p
+                    sorted_logits = sorted_logits.masked_fill(mask, float("-inf"))
+                    logits_last = torch.full_like(logits_last, float("-inf")).scatter(
+                        1, sorted_idx, sorted_logits
+                    )
+                next_tok = torch.multinomial(F.softmax(logits_last, dim=-1), num_samples=1)
+            idx = torch.cat([idx, next_tok], dim=1)
+            if eos_id is not None and (next_tok == eos_id).all():
+                break
+            logits, _ = self(next_tok, cache=cache)
+        return idx

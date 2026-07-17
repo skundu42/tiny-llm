@@ -127,3 +127,81 @@ def test_attention_is_causal():
     with torch.no_grad():
         y, y2 = attn(x, cos[:12], sin[:12]), attn(x2, cos[:12], sin[:12])
     assert torch.allclose(y[:, :6], y2[:, :6], atol=1e-5)
+
+
+from tinyllm.model import TinyLLM
+
+
+def test_param_counts_exact():
+    from tinyllm.config import MODEL_PRESETS
+
+    with torch.device("meta"):
+        d26 = TinyLLM(MODEL_PRESETS["d26"])
+        smoke = TinyLLM(MODEL_PRESETS["smoke"])
+    assert d26.num_params() == 489_297_408
+    assert smoke.num_params() == 13_111_296
+
+
+def test_tied_embeddings():
+    model = TinyLLM(_small_cfg())
+    assert model.lm_head.weight is model.embed.weight
+
+
+def test_forward_loss_near_uniform_at_init():
+    import math
+
+    torch.manual_seed(0)
+    cfg = _small_cfg()
+    model = TinyLLM(cfg)
+    x = torch.randint(0, cfg.vocab_size, (2, 16))
+    logits, loss = model(x, targets=x)
+    assert logits.shape == (2, 16, cfg.vocab_size)
+    assert abs(loss.item() - math.log(cfg.vocab_size)) < 1.0
+
+
+def test_model_is_causal():
+    torch.manual_seed(0)
+    cfg = _small_cfg()
+    model = TinyLLM(cfg).eval()
+    x = torch.randint(0, cfg.vocab_size, (1, 12))
+    x2 = x.clone()
+    x2[:, 6:] = torch.randint(0, cfg.vocab_size, (1, 6))
+    with torch.no_grad():
+        y, _ = model(x)
+        y2, _ = model(x2)
+    assert torch.allclose(y[:, :6], y2[:, :6], atol=1e-4)
+
+
+def test_generate_greedy_matches_uncached_argmax():
+    torch.manual_seed(0)
+    cfg = _small_cfg()
+    model = TinyLLM(cfg).eval()
+    prompt = torch.randint(0, cfg.vocab_size, (1, 5))
+
+    out = model.generate(prompt.clone(), max_new_tokens=8, temperature=0.0)
+
+    seq = prompt.clone()
+    with torch.no_grad():
+        for _ in range(8):
+            logits, _ = model(seq)
+            seq = torch.cat([seq, logits[:, -1:].argmax(-1)], dim=1)
+    assert torch.equal(out, seq)
+
+
+def test_generate_respects_eos():
+    torch.manual_seed(0)
+    cfg = _small_cfg()
+    model = TinyLLM(cfg).eval()
+    prompt = torch.randint(0, cfg.vocab_size, (1, 3))
+    greedy = model.generate(prompt.clone(), max_new_tokens=10, temperature=0.0)
+    eos = greedy[0, 4].item()  # force an early stop at the 2nd generated token
+    out = model.generate(prompt.clone(), max_new_tokens=10, temperature=0.0, eos_id=eos)
+    assert out.shape[1] == 5
+
+
+def test_residual_projections_scaled_init():
+    cfg = _small_cfg()
+    model = TinyLLM(cfg)
+    expected_std = 0.02 / (2 * cfg.n_layer) ** 0.5
+    assert abs(model.blocks[0].attn.wo.weight.std().item() - expected_std) < expected_std * 0.2
+    assert abs(model.blocks[0].mlp.w_down.weight.std().item() - expected_std) < expected_std * 0.2
