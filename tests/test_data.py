@@ -2,6 +2,7 @@ import json
 import os
 
 import numpy as np
+import pytest
 import torch
 
 from tinyllm.data import ShardWriter, TokenShards
@@ -55,12 +56,28 @@ def test_sampler_deterministic(tmp_path):
     assert torch.equal(x1, x2)
 
 
-def test_sampler_crosses_shard_correctly(tmp_path):
-    # tokens encode their own position -> any crop must be contiguous
-    _write(tmp_path, "train", [i % 1000 for i in range(3000)], shard_tokens=1000)
+def test_sampler_crops_contiguous_and_all_shards_reachable(tmp_path):
+    # tokens encode their global position -> any crop must be a contiguous run
+    _write(tmp_path, "train", list(range(3000)), shard_tokens=1000)
     ds = TokenShards(str(tmp_path), "train")
     rng = np.random.default_rng(7)
-    for _ in range(20):
+    seen = set()
+    for _ in range(50):
         x, y = ds.sample_batch(2, 64, rng)
-        diffs = (x[:, 1:] - x[:, :-1]) % 1000
-        assert (diffs == 1).all()
+        assert ((x[:, 1:] - x[:, :-1]) == 1).all()
+        seen.update((x[:, 0] // 1000).tolist())
+    assert seen == {0, 1, 2}
+
+
+def test_sampler_exact_length_shard_is_usable(tmp_path):
+    _write(tmp_path, "train", list(range(65)), shard_tokens=1000)
+    ds = TokenShards(str(tmp_path), "train")
+    x, y = ds.sample_batch(2, 64, np.random.default_rng(0))
+    assert torch.equal(x[0], torch.arange(64))
+    assert torch.equal(y[0], torch.arange(1, 65))
+
+
+def test_rewriting_existing_split_raises(tmp_path):
+    _write(tmp_path, "val", list(range(500)))
+    with pytest.raises(ValueError, match="already contains"):
+        ShardWriter(str(tmp_path), "val", shard_tokens=1000)
