@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasets import load_dataset
 
-from tinyllm.data import ShardWriter
-from tinyllm.tokenizer import BPETokenizer
+from tinylm.data import ShardWriter
+from tinylm.tokenizer import BPETokenizer
 
 
 def main() -> None:

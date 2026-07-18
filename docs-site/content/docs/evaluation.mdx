@@ -8,8 +8,8 @@ Two numbers say whether the run is working, and they say different things.
 it is the number you watch. **HellaSwag** is discrete, downstream, and run
 after the fact; it is the number that says the model learned something a human
 would call knowledge. Both are implemented in this repo without a harness:
-validation lives inside `tinyllm/train.py`, HellaSwag in
-`tinyllm/eval_hellaswag.py`.
+validation lives inside `tinylm/train.py`, HellaSwag in
+`tinylm/eval_hellaswag.py`.
 
 ## Validation loss
 
@@ -44,7 +44,7 @@ def eval_val() -> float:
   would be unreadable. The `999` is a namespace constant making these draws
   independent from the training stream's `[seed, rank, step, micro]`; sampling
   with replacement still permits chance overlap.
-- **`model.eval()` / `model.train()` bracket the call.** `tinyllm` has no dropout
+- **`model.eval()` / `model.train()` bracket the call.** `tinylm` has no dropout
   and no batchnorm, so this changes no math today; it is the correct habit, and
   it is what makes adding a stochastic layer later safe rather than silently
   wrong.
@@ -229,7 +229,7 @@ decisions.
   `acc_norm` from EleutherAI's `lm-evaluation-harness` normalizes by the
   **character length** of the continuation string instead. The two are close in
   spirit and not identical in value, and ours additionally depends on our own
-  32,768-token tokenizer. **Compare these numbers to other `tinyllm` runs, not to
+  32,768-token tokenizer. **Compare these numbers to other `tinylm` runs, not to
   a published leaderboard.**
 </Callout>
 
@@ -275,7 +275,7 @@ for ex in ds:
 ### Running it
 
 ```bash
-uv run python -m tinyllm.eval_hellaswag \
+uv run python -m tinylm.eval_hellaswag \
     --ckpt out/d26/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json \
     --limit 1000

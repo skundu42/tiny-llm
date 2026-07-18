@@ -72,8 +72,8 @@ What actually matters for this run, in order:
 Provision an **H100 80GB** with **≥60 GB disk**, then:
 
 ```bash
-git clone <repo-url> tiny-llm
-cd tiny-llm
+git clone <repo-url> tiny-lm
+cd tiny-lm
 ```
 
 ## Step 2: Bootstrap
@@ -147,7 +147,7 @@ finding out your config is wrong now or 20 hours and $60 from now.
 
 ```bash
 tmux new -s rehearsal
-uv run python -m tinyllm.train --config d26 \
+uv run python -m tinylm.train --config d26 \
     --tokenizer tokenizer/tokenizer.json \
     --out-dir out/rehearsal --steps 200
 ```
@@ -200,7 +200,7 @@ and 20 hours with it.
 
 ```bash
 tmux new -s train
-uv run python -m tinyllm.train --config d26 \
+uv run python -m tinylm.train --config d26 \
     --tokenizer tokenizer/tokenizer.json
 ```
 
@@ -209,9 +209,9 @@ Detach with `Ctrl-b d`; reattach later with `tmux attach -t train`.
 Optionally add Weights & Biases:
 
 ```bash
-uv run python -m tinyllm.train --config d26 \
+uv run python -m tinylm.train --config d26 \
     --tokenizer tokenizer/tokenizer.json \
-    --wandb tiny-llm
+    --wandb tiny-lm
 ```
 
 `--wandb` sets `wandb_project`; empty (the default) disables it entirely. The
@@ -225,7 +225,7 @@ config.
 On an 8×H100 box, the same run via `torchrun`:
 
 ```bash
-uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
+uv run torchrun --standalone --nproc_per_node=8 -m tinylm.train \
     --config d26 --tokenizer tokenizer/tokenizer.json
 ```
 
@@ -275,7 +275,7 @@ model weights, **both optimizers' state**, the step, and both configs. To resume
 
 ```bash
 tmux new -s train
-uv run python -m tinyllm.train --config d26 \
+uv run python -m tinylm.train --config d26 \
     --tokenizer tokenizer/tokenizer.json --resume
 ```
 
@@ -308,8 +308,8 @@ Three things to know:
 Muon and AdamW optimizer state):
 
 ```bash
-scp user@<host>:~/tiny-llm/out/d26/ckpt_last.pt ./ckpt_d26.pt
-scp user@<host>:~/tiny-llm/out/d26/log.csv ./log_d26.csv
+scp user@<host>:~/tiny-lm/out/d26/ckpt_last.pt ./ckpt_d26.pt
+scp user@<host>:~/tiny-lm/out/d26/log.csv ./log_d26.csv
 ```
 
 Take `log.csv` too; it is the run's entire history and it is 40 KB.
@@ -317,12 +317,12 @@ Take `log.csv` too; it is the run's entire history and it is 40 KB.
 Then verify the checkpoint actually loads before you terminate anything:
 
 ```bash
-uv run python -m tinyllm.sample --ckpt out/d26/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/d26/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --prompt "Photosynthesis is"
 ```
 
 ```bash
-uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
+uv run python -m tinylm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --limit 1000
 ```
 

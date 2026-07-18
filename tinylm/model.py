@@ -1,4 +1,4 @@
-"""TinyLLM: a from-scratch decoder-only transformer.
+"""TinyLM: a from-scratch decoder-only transformer.
 
 RMSNorm pre-norm, RoPE, grouped-query attention with QK-norm, SwiGLU,
 tied embeddings, no biases anywhere.
@@ -131,7 +131,7 @@ class Block(nn.Module):
         return x
 
 
-class TinyLLM(nn.Module):
+class TinyLM(nn.Module):
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
         self.cfg = cfg

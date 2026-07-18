@@ -1,6 +1,6 @@
 import pytest
 
-from tinyllm.config import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
+from tinylm.config import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
 
 
 def test_presets_exist():

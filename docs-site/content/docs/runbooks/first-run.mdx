@@ -89,8 +89,8 @@ suitable interpreter automatically if your system lacks one.
 ## Step 2: Get the code
 
 ```bash
-git clone <repo-url> tiny-llm
-cd tiny-llm
+git clone <repo-url> tiny-lm
+cd tiny-lm
 uv sync
 ```
 
@@ -142,7 +142,7 @@ takes a second:
 
 ```bash
 uv run python -c "
-from tinyllm.tokenizer import BPETokenizer
+from tinylm.tokenizer import BPETokenizer
 t = BPETokenizer.load('tokenizer/tokenizer.json')
 s = 'My first language model.'
 assert t.decode(t.encode(s)) == s
@@ -205,7 +205,7 @@ HuggingFace cache.
 ## Step 6: Train
 
 ```bash
-uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json
+uv run python -m tinylm.train --config smoke --tokenizer tokenizer/tokenizer.json
 ```
 
 No device flags are needed: the trainer picks CUDA if present, then Apple
@@ -266,7 +266,7 @@ noise to grammar.
 ## Step 7: Sample from your model
 
 ```bash
-uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/smoke/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --prompt "The" --max-new-tokens 60
 ```
 

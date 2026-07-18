@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from tinyllm.data import ShardWriter, TokenShards
+from tinylm.data import ShardWriter, TokenShards
 
 
 def _write(tmp_path, split, tokens, shard_tokens=1000):

@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from .config import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
 from .data import TokenShards
-from .model import TinyLLM
+from .model import TinyLM
 from .muon import build_optimizers
 
 PEAK_FLOPS = {"NVIDIA H100": 989e12, "NVIDIA A100": 312e12}
@@ -84,7 +84,7 @@ def _distributed_mean(value: torch.Tensor, world: int) -> torch.Tensor:
     return result
 
 
-def _flops_per_token(model: TinyLLM, cfg: ModelConfig) -> int:
+def _flops_per_token(model: TinyLM, cfg: ModelConfig) -> int:
     """Approximate training FLOPs/token, including the tied output projection."""
     return 6 * model.num_params() + 12 * cfg.n_layer * cfg.d_model * cfg.seq_len
 
@@ -157,7 +157,7 @@ def run(
     train_data = TokenShards(tc.data_dir, "train")
     val_data = TokenShards(tc.data_dir, "val")
 
-    raw_model = TinyLLM(mc).to(device)
+    raw_model = TinyLM(mc).to(device)
     model = raw_model
     use_compile = tc.compile and device.startswith("cuda")
     if tc.compile and not use_compile and master:
@@ -325,7 +325,7 @@ def run(
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Pretrain TinyLLM")
+    p = argparse.ArgumentParser(description="Pretrain TinyLM")
     p.add_argument("--config", choices=sorted(MODEL_PRESETS), default="smoke")
     p.add_argument("--data-dir")
     p.add_argument("--out-dir")

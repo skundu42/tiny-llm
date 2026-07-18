@@ -24,7 +24,7 @@ These are real measurements from the committed code, not estimates.
 | Shard size | 25M tokens (uint16) |
 | Fast tokenizer | verified token-identical on 200 docs before use |
 
-## Smoke pretrain (`tinyllm.train --config smoke --device mps`)
+## Smoke pretrain (`tinylm.train --config smoke --device mps`)
 
 Model: 13,111,296 params (6 layers, d_model 256, 4 heads, 2 KV heads, ctx 512), grad_accum 4, 600 steps.
 
@@ -61,7 +61,7 @@ At step 400 (temperature 0.8, top-k 50, unconditional):
 > A. The following you
 > - It's important to do that this is the same. When it's an example of what you are going to a different way.
 
-At step 600 via `tinyllm.sample`, prompt `"The"` (seed 1):
+At step 600 via `tinylm.sample`, prompt `"The"` (seed 1):
 
 > The 'the last in the first years of the past was the most common in the world. The best way to be the most diverse and highly difficult, while there was a lot of the most important for future lives. In a very high level of work, the world's most important is the same as
 

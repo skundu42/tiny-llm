@@ -3,7 +3,7 @@ import types
 import pytest
 import torch
 
-from tinyllm.model import RMSNorm, apply_rope, precompute_rope
+from tinylm.model import RMSNorm, apply_rope, precompute_rope
 
 
 def test_rmsnorm_unit_rms():
@@ -51,8 +51,8 @@ def test_rope_position_zero_is_identity():
 
 import torch.nn.functional as F
 
-from tinyllm.config import ModelConfig
-from tinyllm.model import Attention, KVCache
+from tinylm.config import ModelConfig
+from tinylm.model import Attention, KVCache
 
 
 def _small_cfg() -> ModelConfig:
@@ -81,7 +81,7 @@ def test_sdpa_matches_reference():
 def test_attention_shapes_and_grad():
     torch.manual_seed(0)
     cfg = _small_cfg()
-    from tinyllm.model import precompute_rope
+    from tinylm.model import precompute_rope
 
     attn = Attention(cfg, layer_idx=0)
     cos, sin = precompute_rope(cfg.head_dim, cfg.seq_len, cfg.rope_theta)
@@ -96,7 +96,7 @@ def test_kv_cache_matches_full_forward():
     """Prefill+decode through the cache must equal one full no-cache pass."""
     torch.manual_seed(0)
     cfg = _small_cfg()
-    from tinyllm.model import precompute_rope
+    from tinylm.model import precompute_rope
 
     attn = Attention(cfg, layer_idx=0).eval()
     cos, sin = precompute_rope(cfg.head_dim, cfg.seq_len, cfg.rope_theta)
@@ -130,7 +130,7 @@ def test_kv_cache_rejects_chunked_decode():
 def test_attention_is_causal():
     torch.manual_seed(0)
     cfg = _small_cfg()
-    from tinyllm.model import precompute_rope
+    from tinylm.model import precompute_rope
 
     attn = Attention(cfg, layer_idx=0).eval()
     cos, sin = precompute_rope(cfg.head_dim, cfg.seq_len, cfg.rope_theta)
@@ -142,21 +142,21 @@ def test_attention_is_causal():
     assert torch.allclose(y[:, :6], y2[:, :6], atol=1e-5)
 
 
-from tinyllm.model import TinyLLM
+from tinylm.model import TinyLM
 
 
 def test_param_counts_exact():
-    from tinyllm.config import MODEL_PRESETS
+    from tinylm.config import MODEL_PRESETS
 
     with torch.device("meta"):
-        d26 = TinyLLM(MODEL_PRESETS["d26"])
-        smoke = TinyLLM(MODEL_PRESETS["smoke"])
+        d26 = TinyLM(MODEL_PRESETS["d26"])
+        smoke = TinyLM(MODEL_PRESETS["smoke"])
     assert d26.num_params() == 489_297_408
     assert smoke.num_params() == 13_111_296
 
 
 def test_tied_embeddings():
-    model = TinyLLM(_small_cfg())
+    model = TinyLM(_small_cfg())
     assert model.lm_head.weight is model.embed.weight
 
 
@@ -165,7 +165,7 @@ def test_forward_loss_near_uniform_at_init():
 
     torch.manual_seed(0)
     cfg = _small_cfg()
-    model = TinyLLM(cfg)
+    model = TinyLM(cfg)
     x = torch.randint(0, cfg.vocab_size, (2, 17))
     logits, loss = model(x[:, :-1], targets=x[:, 1:])
     assert logits.shape == (2, 16, cfg.vocab_size)
@@ -175,7 +175,7 @@ def test_forward_loss_near_uniform_at_init():
 def test_model_is_causal():
     torch.manual_seed(0)
     cfg = _small_cfg()
-    model = TinyLLM(cfg).eval()
+    model = TinyLM(cfg).eval()
     x = torch.randint(0, cfg.vocab_size, (1, 12))
     x2 = x.clone()
     x2[:, 6:] = torch.randint(0, cfg.vocab_size, (1, 6))
@@ -188,7 +188,7 @@ def test_model_is_causal():
 def test_generate_greedy_matches_uncached_argmax():
     torch.manual_seed(0)
     cfg = _small_cfg()
-    model = TinyLLM(cfg).eval()
+    model = TinyLM(cfg).eval()
     prompt = torch.randint(0, cfg.vocab_size, (1, 5))
 
     out = model.generate(prompt.clone(), max_new_tokens=8, temperature=0.0)
@@ -204,7 +204,7 @@ def test_generate_greedy_matches_uncached_argmax():
 def test_generate_respects_eos():
     torch.manual_seed(0)
     cfg = _small_cfg()
-    model = TinyLLM(cfg).eval()
+    model = TinyLM(cfg).eval()
     prompt = torch.randint(0, cfg.vocab_size, (1, 3))
     greedy = model.generate(prompt.clone(), max_new_tokens=10, temperature=0.0)
     eos = greedy[0, 3].item()  # first generated token
@@ -227,7 +227,7 @@ def test_generate_respects_eos():
     ],
 )
 def test_generate_rejects_invalid_controls(kwargs, message):
-    model = TinyLLM(_small_cfg())
+    model = TinyLM(_small_cfg())
     prompt = torch.ones((1, 1), dtype=torch.long)
     controls = dict(kwargs)
     max_new_tokens = controls.pop("max_new_tokens", 1)
@@ -245,11 +245,11 @@ def test_generate_rejects_invalid_controls(kwargs, message):
 )
 def test_generate_rejects_invalid_prompt_tokens(prompt):
     with pytest.raises(ValueError, match="idx"):
-        TinyLLM(_small_cfg()).generate(prompt, max_new_tokens=1)
+        TinyLM(_small_cfg()).generate(prompt, max_new_tokens=1)
 
 
 def test_generate_zero_tokens_avoids_forward_and_preserves_mode():
-    model = TinyLLM(_small_cfg()).train()
+    model = TinyLM(_small_cfg()).train()
     prompt = torch.ones((1, 3), dtype=torch.long)
     calls = 0
 
@@ -266,7 +266,7 @@ def test_generate_zero_tokens_avoids_forward_and_preserves_mode():
 
 
 def test_generate_does_not_decode_after_final_token():
-    model = TinyLLM(_small_cfg()).eval()
+    model = TinyLM(_small_cfg()).eval()
     prompt = torch.ones((1, 3), dtype=torch.long)
     calls = 0
 
@@ -282,7 +282,7 @@ def test_generate_does_not_decode_after_final_token():
 
 
 def test_generate_tracks_eos_per_batch_row():
-    model = TinyLLM(_small_cfg()).eval()
+    model = TinyLM(_small_cfg()).eval()
     calls = 0
 
     def scripted_forward(self, idx, targets=None, cache=None):
@@ -306,7 +306,7 @@ def test_generate_tracks_eos_per_batch_row():
 
 def test_residual_projections_scaled_init():
     cfg = _small_cfg()
-    model = TinyLLM(cfg)
+    model = TinyLM(cfg)
     expected_std = 0.02 / (2 * cfg.n_layer) ** 0.5
     assert abs(model.blocks[0].attn.wo.weight.std().item() - expected_std) < expected_std * 0.2
     assert abs(model.blocks[0].mlp.w_down.weight.std().item() - expected_std) < expected_std * 0.2

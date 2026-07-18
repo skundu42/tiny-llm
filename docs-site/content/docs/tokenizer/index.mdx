@@ -5,9 +5,9 @@ description: How the tokenizer turns text into integers, from raw bytes up
 
 The tokenizer is the boundary between text and tensors. Everything downstream
 (the embedding table, the sampler, the loss) operates on integer token ids, so
-the design choices here quietly set the terms for the whole model. `tinyllm`
+the design choices here quietly set the terms for the whole model. `tinylm`
 ships a byte-level Byte-Pair Encoding (BPE) tokenizer written from scratch in
-`tinyllm/tokenizer.py`, with no dependency on `tiktoken` or a pretrained vocab.
+`tinylm/tokenizer.py`, with no dependency on `tiktoken` or a pretrained vocab.
 This page builds it up from first principles.
 
 ## Why bytes, and why BPE
@@ -37,7 +37,7 @@ Byte-level BPE resolves the tension:
   byte length while rare text still degrades gracefully all the way down to
   individual bytes.
 
-Concretely, `tinyllm`'s vocabulary is built from exactly three ingredients:
+Concretely, `tinylm`'s vocabulary is built from exactly three ingredients:
 
 ```
 256 raw byte tokens  +  N learned merges  +  1 special token  =  vocab_size
@@ -68,7 +68,7 @@ punctuation onto words in ways that generalize poorly. Instead, text is first
 chopped into **pre-tokens** (rough word-like chunks), and merges are only ever
 allowed *within* a pre-token. A merge can never cross a chunk boundary.
 
-The split is done with a regular expression. `tinyllm` uses the GPT-4-style
+The split is done with a regular expression. `tinylm` uses the GPT-4-style
 pattern, applied with the `regex` module (not the stdlib `re`, because the
 pattern needs Unicode property classes like `\p{L}`):
 
@@ -133,7 +133,7 @@ contract, and it is stored inside the saved tokenizer file.
 ### One deliberate deviation: no possessive quantifiers
 
 The canonical GPT-4 pattern uses **possessive** quantifiers (`?+`, `++`) in a
-couple of branches. `tinyllm` replaces them with ordinary **greedy** ones (`?`,
+couple of branches. `tinylm` replaces them with ordinary **greedy** ones (`?`,
 `+`). The reason is interoperability, spelled out in the source comment:
 
 ```python
@@ -143,7 +143,7 @@ couple of branches. `tinyllm` replaces them with ordinary **greedy** ones (`?`,
 ```
 
 The Rust regex engine behind Hugging Face `tokenizers` does not support
-possessive quantifiers, and `tinyllm` wants to hand that engine the *exact same*
+possessive quantifiers, and `tinylm` wants to hand that engine the *exact same*
 pattern so it can offload bulk encoding to it (see
 [Format and the fast path](/docs/tokenizer/format-and-fast-path)). In these
 branches, where each quantified class is immediately followed by a class that

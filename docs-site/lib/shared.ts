@@ -1,4 +1,4 @@
-export const appName = 'tiny-llm';
+export const appName = 'tiny-lm';
 export const appDescription = 'A ~500M-parameter LLM pretrained from scratch';
 export const docsRoute = '/docs';
 export const docsImageRoute = '/og/docs';
@@ -10,6 +10,6 @@ export const siteUrl = configuredSiteUrl ?? (vercelSiteUrl ? `https://${vercelSi
 
 export const gitConfig = {
   user: 'skundu42',
-  repo: 'tiny-llm',
+  repo: 'tiny-lm',
   branch: 'main',
 };

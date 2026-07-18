@@ -1,9 +1,9 @@
 ---
-title: tinyllm.data
+title: tinylm.data
 description: ShardWriter and TokenShards; the uint16 shard format, memmapped random-crop sampling, and the prepare_data CLI
 ---
 
-126 lines: `tinyllm/data.py`. One class writes token ids into fixed-size uint16
+126 lines: `tinylm/data.py`. One class writes token ids into fixed-size uint16
 `.bin` shards, another memory-maps them back and samples random crops. No
 `DataLoader`, no workers, no collate function. See [Data](/docs/data) for the
 design.
@@ -116,7 +116,7 @@ Flushes the partial shard, then merges this split's entries into `index.json`,
 **Always call it**: the last shard and the entire index depend on it.
 
 ```python
-from tinyllm.data import ShardWriter
+from tinylm.data import ShardWriter
 
 w = ShardWriter("data/demo", "train", shard_tokens=1000)
 w.write([1, 2, 3])
@@ -204,7 +204,7 @@ Four things worth knowing:
 ```python
 import numpy as np
 
-from tinyllm.data import TokenShards
+from tinylm.data import TokenShards
 
 data = TokenShards("data/smoke", "train")
 print(f"{data.total_tokens:,}")                  # 57,998,487
@@ -268,7 +268,7 @@ for ids in encs:
 
 Note `ids.append(eot)`: **every document is terminated with `<|endoftext|>`**,
 which is the token that teaches the model where documents end and is why
-[`tinyllm.sample`](/docs/api/sample-and-eval#main) prefixes prompts with it.
+[`tinylm.sample`](/docs/api/sample-and-eval#main) prefixes prompts with it.
 
 **Val shards are capped** at `min(shard_tokens, val_tokens)`, so validation is not
 forced into one enormous shard:

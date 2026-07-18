@@ -6,7 +6,7 @@ description: Atomic writes, what a checkpoint contains, and the bit-exact resume
 A pretraining run is long and machines fail. The value of a checkpoint is only as
 good as two guarantees: that writing it can never corrupt the previous one, and
 that loading it resumes the run **exactly**: not "close enough," but producing
-the same weights the uninterrupted run would have. `tinyllm` delivers both, and
+the same weights the uninterrupted run would have. `tinylm` delivers both, and
 the second is backed by a test that checks bit-for-bit equality.
 
 ## Atomic writes

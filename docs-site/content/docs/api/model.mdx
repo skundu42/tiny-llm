@@ -1,9 +1,9 @@
 ---
-title: tinyllm.model
-description: RMSNorm, RoPE, KVCache, Attention, SwiGLU, Block and TinyLLM; exact signatures, shapes, and usage
+title: tinylm.model
+description: RMSNorm, RoPE, KVCache, Attention, SwiGLU, Block and TinyLM; exact signatures, shapes, and usage
 ---
 
-The whole transformer in 276 lines: `tinyllm/model.py`. Pre-norm RMSNorm, RoPE,
+The whole transformer in 276 lines: `tinylm/model.py`. Pre-norm RMSNorm, RoPE,
 grouped-query attention with QK-norm, SwiGLU, tied embeddings, **no biases
 anywhere**. [Architecture](/docs/architecture) explains the design; this page is
 the signature reference.
@@ -39,7 +39,7 @@ fp32 even under bf16 autocast, then the result returns to the input's dtype. See
 ```python
 import torch
 
-from tinyllm.model import RMSNorm
+from tinylm.model import RMSNorm
 
 norm = RMSNorm(64)
 x = torch.randn(2, 10, 64)
@@ -63,7 +63,7 @@ def precompute_rope(
 
 **Returns:** `(cos, sin)`, each `(max_seq_len, head_dim // 2)`, **float32**.
 
-Called once in `TinyLLM.__init__` and registered as **non-persistent** buffers
+Called once in `TinyLM.__init__` and registered as **non-persistent** buffers
 (`persistent=False`), so the tables are recomputed on load rather than stored in
 the checkpoint. This is why `max_seq_len` here fixes the hard generation ceiling:
 there is no table row for position `seq_len`.
@@ -82,13 +82,13 @@ of the precomputed tables, **already sliced to the positions `x` occupies**.
 
 NeoX half-split convention: `x` is split into halves rather than interleaved
 even/odd pairs. The caller owns the position offset: during decode,
-`TinyLLM.forward` slices `rope_cos[pos0 : pos0 + T]`, which is what keeps a cached
+`TinyLM.forward` slices `rope_cos[pos0 : pos0 + T]`, which is what keeps a cached
 key's rotation tied to its absolute position. See [RoPE](/docs/architecture/rope).
 
 ```python
 import torch
 
-from tinyllm.model import apply_rope, precompute_rope
+from tinylm.model import apply_rope, precompute_rope
 
 cos, sin = precompute_rope(64, 2048, 10000.0)
 q = torch.randn(1, 20, 10, 64)
@@ -152,7 +152,7 @@ def advance(self, t: int) -> None:
 
 **Args:** `t`: positions consumed. **Returns:** `None`.
 
-Called **once per forward** by `TinyLLM.forward`, after all blocks have written,
+Called **once per forward** by `TinyLM.forward`, after all blocks have written,
 never per layer.
 
 <Callout type="warn">
@@ -239,10 +239,10 @@ d_model)`.
 carries the un-normalized stream, so there is a clean identity path from
 embedding to output.
 
-## `TinyLLM`
+## `TinyLM`
 
 ```python
-class TinyLLM(nn.Module):
+class TinyLM(nn.Module):
     def __init__(self, cfg: ModelConfig) -> None:
         ...
 ```
@@ -338,10 +338,10 @@ order.
 ```python
 import torch
 
-from tinyllm import BPETokenizer, ModelConfig, TinyLLM
+from tinylm import BPETokenizer, ModelConfig, TinyLM
 
 cfg = ModelConfig(n_layer=2, n_head=4, n_kv_head=2, d_model=128, d_ff=256, seq_len=128)
-model = TinyLLM(cfg)
+model = TinyLM(cfg)
 print(f"{model.num_params():,}")
 
 # training-style forward

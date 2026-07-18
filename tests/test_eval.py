@@ -1,8 +1,8 @@
 import torch
 
-from tinyllm.config import ModelConfig
-from tinyllm.eval_hellaswag import ending_losses
-from tinyllm.model import TinyLLM
+from tinylm.config import ModelConfig
+from tinylm.eval_hellaswag import ending_losses
+from tinylm.model import TinyLM
 
 
 def test_ending_losses_prefers_repeated_pattern():
@@ -11,7 +11,7 @@ def test_ending_losses_prefers_repeated_pattern():
     torch.manual_seed(0)
     cfg = ModelConfig(vocab_size=32, n_layer=2, n_head=2, n_kv_head=1,
                       d_model=64, d_ff=128, seq_len=256)
-    model = TinyLLM(cfg)
+    model = TinyLM(cfg)
     opt = torch.optim.AdamW(model.parameters(), lr=3e-3)
     data = torch.arange(64).remainder(8).repeat(4)[None, :]  # 0..7 cycle
     for _ in range(150):
@@ -31,6 +31,6 @@ def test_ending_losses_prefers_repeated_pattern():
 def test_ending_losses_lengths_dont_crash():
     cfg = ModelConfig(vocab_size=32, n_layer=1, n_head=2, n_kv_head=1,
                       d_model=32, d_ff=64, seq_len=64)
-    model = TinyLLM(cfg)
+    model = TinyLM(cfg)
     out = ending_losses(model, [1, 2], [[3], [4, 5, 6]], device="cpu")
     assert len(out) == 2

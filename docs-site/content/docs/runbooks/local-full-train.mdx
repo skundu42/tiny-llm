@@ -61,7 +61,7 @@ summary.
 ## Step 2: Launch it overnight
 
 ```bash
-caffeinate -is uv run python -m tinyllm.train --config smoke \
+caffeinate -is uv run python -m tinylm.train --config smoke \
     --tokenizer tokenizer/tokenizer.json \
     --data-dir data/fineweb-275m \
     --out-dir out/smoke-full \
@@ -110,10 +110,10 @@ whatever your `log.csv` says as the first real measurement of this
 configuration. Two things worth doing with the finished checkpoint:
 
 ```bash
-uv run python -m tinyllm.sample --ckpt out/smoke-full/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/smoke-full/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --prompt "Photosynthesis is"
 
-uv run python -m tinyllm.eval_hellaswag --ckpt out/smoke-full/ckpt_last.pt \
+uv run python -m tinylm.eval_hellaswag --ckpt out/smoke-full/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --limit 1000
 ```
 
@@ -128,12 +128,12 @@ statement about the scale, not a bug. See
 
 Between `smoke` (13M) and `d26` (489M) there is room for a preset that only a
 config entry away. The CLI restricts `--config` to the presets in
-`tinyllm/config.py`, so a mid-size model means adding one. For example, a
+`tinylm/config.py`, so a mid-size model means adding one. For example, a
 **50,608,128-parameter** model (the count comes from instantiating it and
 calling the model's own `num_params()`, printed by the snippet below):
 
 ```python
-# tinyllm/config.py
+# tinylm/config.py
 MODEL_PRESETS: dict[str, ModelConfig] = {
     "d26": ModelConfig(),
     "smoke": ModelConfig(n_layer=6, n_head=4, n_kv_head=2, d_model=256, d_ff=768, seq_len=512),
@@ -167,9 +167,9 @@ trusting it:
 
 ```bash
 uv run python -c "
-from tinyllm.config import MODEL_PRESETS
-from tinyllm.model import TinyLLM
-m = TinyLLM(MODEL_PRESETS['mid'])
+from tinylm.config import MODEL_PRESETS
+from tinylm.model import TinyLM
+m = TinyLM(MODEL_PRESETS['mid'])
 print(f'{m.num_params():,} total, {m.num_params(non_embedding=True):,} non-embedding')"
 ```
 
@@ -190,7 +190,7 @@ uv run python scripts/prepare_data.py --data-dir data/mid \
     --max-tokens 1050000000
 
 # 15-minute rehearsal
-uv run python -m tinyllm.train --config mid \
+uv run python -m tinylm.train --config mid \
     --tokenizer tokenizer/tokenizer.json \
     --out-dir out/mid-rehearsal --steps 200
 ```

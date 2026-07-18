@@ -5,7 +5,7 @@ description: The word-count plus incremental pair-index algorithm, its complexit
 
 Training a BPE tokenizer means discovering, in order, the most useful byte
 merges from a corpus. The textbook algorithm is simple to state and painfully
-slow to run at scale. `tinyllm`'s trainer (`BPETokenizer.train`) keeps the exact
+slow to run at scale. `tinylm`'s trainer (`BPETokenizer.train`) keeps the exact
 same output but makes it tractable (32,511 merges over roughly a gigabyte of
 text, in pure Python) with two ideas: **count unique words once**, and
 **maintain the pair counts incrementally** instead of rescanning.
@@ -24,7 +24,7 @@ once per merge, is `O(n_merges × corpus_length)`. With ~32k merges and a
 billion-token corpus that is tens of trillions of operations, a non-starter in
 Python.
 
-`tinyllm` attacks both factors: it shrinks `corpus_length` down to the set of
+`tinylm` attacks both factors: it shrinks `corpus_length` down to the set of
 *distinct words*, and it removes the "once per merge" rescan entirely.
 
 ## First win: count unique words, not the corpus

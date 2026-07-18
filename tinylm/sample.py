@@ -6,21 +6,21 @@ import argparse
 import torch
 
 from .config import ModelConfig
-from .model import TinyLLM
+from .model import TinyLM
 from .tokenizer import BPETokenizer
 
 
-def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
+def load_model(ckpt_path: str, device: str) -> tuple[TinyLM, ModelConfig]:
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     cfg = ModelConfig(**ckpt["model_cfg"])
-    model = TinyLLM(cfg).to(device)
+    model = TinyLM(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, cfg
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Sample from TinyLLM")
+    p = argparse.ArgumentParser(description="Sample from TinyLM")
     p.add_argument("--ckpt", required=True)
     p.add_argument("--tokenizer", required=True)
     p.add_argument("--prompt", default="")

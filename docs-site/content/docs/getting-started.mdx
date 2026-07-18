@@ -18,8 +18,8 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/). Python 3.12+ is
 required (`pyproject.toml` pins `requires-python = ">=3.12"`).
 
 ```bash
-git clone <repo-url> tiny-llm
-cd tiny-llm
+git clone <repo-url> tiny-lm
+cd tiny-lm
 uv sync
 ```
 
@@ -102,10 +102,10 @@ document it is in rather than truncating mid-document. Details in
 ## Train
 
 ```bash
-uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json
+uv run python -m tinylm.train --config smoke --tokenizer tokenizer/tokenizer.json
 ```
 
-The `smoke` preset (`tinyllm/config.py`) is 6 layers, `d_model` 256, 4 heads / 2
+The `smoke` preset (`tinylm/config.py`) is 6 layers, `d_model` 256, 4 heads / 2
 KV heads, `d_ff` 768, context 512 (**13,111,296 parameters**), trained for 600
 steps at 16,384 tokens per step with a 20-step warmup. `torch.compile` is
 disabled automatically off CUDA and precision falls back to fp32, so no flags are
@@ -168,7 +168,7 @@ samples below.
 ## Sample from the checkpoint
 
 ```bash
-uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/smoke/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --prompt "The" --seed 1
 ```
 
@@ -200,9 +200,9 @@ the full ~10B-token FineWeb-Edu subset:
 
 ```bash
 uv run python scripts/prepare_data.py     # full ~10B tokens, ~20 GB
-uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+uv run python -m tinylm.train --config d26 --tokenizer tokenizer/tokenizer.json
 # or on an 8-GPU box:
-uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
+uv run torchrun --standalone --nproc_per_node=8 -m tinylm.train \
     --config d26 --tokenizer tokenizer/tokenizer.json
 ```
 

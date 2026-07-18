@@ -28,7 +28,7 @@ object in memory; `lm_head` uses it transposed.
 
 ```python
 def test_tied_embeddings():
-    model = TinyLLM(_small_cfg())
+    model = TinyLM(_small_cfg())
     assert model.lm_head.weight is model.embed.weight
 ```
 
@@ -107,7 +107,7 @@ def test_forward_loss_near_uniform_at_init():
 
     torch.manual_seed(0)
     cfg = _small_cfg()
-    model = TinyLLM(cfg)
+    model = TinyLM(cfg)
     x = torch.randint(0, cfg.vocab_size, (2, 17))
     logits, loss = model(x[:, :-1], targets=x[:, 1:])
     assert logits.shape == (2, 16, cfg.vocab_size)
@@ -180,7 +180,7 @@ depth-neutral.
 ```python
 def test_residual_projections_scaled_init():
     cfg = _small_cfg()
-    model = TinyLLM(cfg)
+    model = TinyLM(cfg)
     expected_std = 0.02 / (2 * cfg.n_layer) ** 0.5
     assert abs(model.blocks[0].attn.wo.weight.std().item() - expected_std) < expected_std * 0.2
     assert abs(model.blocks[0].mlp.w_down.weight.std().item() - expected_std) < expected_std * 0.2

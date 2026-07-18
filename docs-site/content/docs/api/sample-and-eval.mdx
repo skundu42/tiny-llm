@@ -1,22 +1,22 @@
 ---
-title: tinyllm.sample & tinyllm.eval_hellaswag
+title: tinylm.sample & tinylm.eval_hellaswag
 description: load_model, ending_losses, and both CLI entry points; generating text and scoring HellaSwag from a checkpoint
 ---
 
 The two things you do with a finished checkpoint: read what it writes, and measure
-what it knows. `tinyllm/sample.py` is 49 lines, `tinyllm/eval_hellaswag.py` is 68.
+what it knows. `tinylm/sample.py` is 49 lines, `tinylm/eval_hellaswag.py` is 68.
 [Inference](/docs/inference) and [Evaluation](/docs/evaluation) cover the concepts;
 this page is the signature reference.
 
-## `tinyllm.sample`
+## `tinylm.sample`
 
 ### `load_model`
 
 ```python
-def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
+def load_model(ckpt_path: str, device: str) -> tuple[TinyLM, ModelConfig]:
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     cfg = ModelConfig(**ckpt["model_cfg"])
-    model = TinyLLM(cfg).to(device)
+    model = TinyLM(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, cfg
@@ -24,7 +24,7 @@ def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
 
 **Args:** `ckpt_path`: path to a `ckpt_last.pt`; `device`: where to map it.
 
-**Returns:** `(model, cfg)`: a `TinyLLM` in `eval()` mode, and the `ModelConfig`
+**Returns:** `(model, cfg)`: a `TinyLM` in `eval()` mode, and the `ModelConfig`
 it was built from.
 
 **The architecture is reconstructed from the checkpoint**, not passed in.
@@ -39,7 +39,7 @@ Two things to note:
 - **`weights_only=True`** restricts deserialization to tensors and safe primitive
   containers. Config dictionaries and optimizer state fit that format, so loading
   a checkpoint does not need unrestricted pickle execution.
-- **The model loads in fp32.** `TinyLLM(cfg)` constructs at PyTorch's default
+- **The model loads in fp32.** `TinyLM(cfg)` constructs at PyTorch's default
   dtype and the checkpoint's fp32 master weights load straight in. Cast with
   `model.bfloat16()` if you want bf16; the [KV cache follows
   automatically](/docs/inference#a-note-on-dtype), since its dtype is read off
@@ -48,8 +48,8 @@ Two things to note:
 ```python
 import torch
 
-from tinyllm import BPETokenizer
-from tinyllm.sample import load_model
+from tinylm import BPETokenizer
+from tinylm.sample import load_model
 
 model, cfg = load_model("out/smoke/ckpt_last.pt", "cpu")
 print(cfg.n_layer, cfg.seq_len, f"{model.num_params():,}")   # 6 512 13,111,296
@@ -67,10 +67,10 @@ def main() -> None:
     ...
 ```
 
-The `python -m tinyllm.sample` entry point.
+The `python -m tinylm.sample` entry point.
 
 ```bash
-uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/smoke/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --prompt "The" --max-new-tokens 60
 ```
 
@@ -110,7 +110,7 @@ always running the full budget.
   `tokenizer/tokenizer.json` is committed for precisely this reason.
 </Callout>
 
-## `tinyllm.eval_hellaswag`
+## `tinylm.eval_hellaswag`
 
 ### `ending_losses`
 
@@ -120,7 +120,7 @@ def ending_losses(model, ctx_ids, ending_ids_list, device) -> list[tuple[float, 
     """Per ending: (sum, mean) cross-entropy over the ending tokens only."""
 ```
 
-**Args:** `model`: a `TinyLLM` (anything with `(logits, loss)` from
+**Args:** `model`: a `TinyLM` (anything with `(logits, loss)` from
 `model(ids)`); `ctx_ids`: `list[int]`, the shared context; `ending_ids_list`:
 `list[list[int]]`, candidate endings; `device`.
 
@@ -141,9 +141,9 @@ prefix:
 ```python
 import torch
 
-from tinyllm import BPETokenizer
-from tinyllm.eval_hellaswag import ending_losses
-from tinyllm.sample import load_model
+from tinylm import BPETokenizer
+from tinylm.eval_hellaswag import ending_losses
+from tinylm.sample import load_model
 
 model, cfg = load_model("out/smoke/ckpt_last.pt", "cpu")
 tok = BPETokenizer.load("tokenizer/tokenizer.json")
@@ -170,10 +170,10 @@ def main() -> None:
     ...
 ```
 
-The `python -m tinyllm.eval_hellaswag` entry point.
+The `python -m tinylm.eval_hellaswag` entry point.
 
 ```bash
-uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
+uv run python -m tinylm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --limit 1000
 ```
 

@@ -1,9 +1,9 @@
 ---
-title: tinyllm.train
+title: tinylm.train
 description: lr_scale, run, main and PEAK_FLOPS; the pretraining entry point, its return value, and the full CLI
 ---
 
-360 lines: `tinyllm/train.py`. bf16 autocast, gradient accumulation, the WSD
+360 lines: `tinylm/train.py`. bf16 autocast, gradient accumulation, the WSD
 schedule, Muon+AdamW, DDP via `torchrun`, atomic checkpoints with bit-exact
 resume, inline MFU. [The training loop](/docs/training) walks the internals;
 this page is the signature reference.
@@ -67,7 +67,7 @@ which is part of why resume is exact.
 | Decay | otherwise | linear → `0`, floored at `1e-8` |
 
 ```python
-from tinyllm.train import lr_scale
+from tinylm.train import lr_scale
 
 # the smoke schedule: 600 steps, 20 warmup, 20% decay
 print(lr_scale(0, 600, 20, 0.2))      # 0.05,   first step
@@ -145,8 +145,8 @@ Behavior worth knowing as a caller:
 ```python
 from dataclasses import replace
 
-from tinyllm import MODEL_PRESETS, TRAIN_PRESETS
-from tinyllm.train import run
+from tinylm import MODEL_PRESETS, TRAIN_PRESETS
+from tinylm.train import run
 
 mc = MODEL_PRESETS["smoke"]
 tc = replace(TRAIN_PRESETS["smoke"], total_steps=50, out_dir="out/probe")
@@ -163,11 +163,11 @@ def main() -> None:
     ...
 ```
 
-The `python -m tinyllm.train` entry point. Parses flags, copies the chosen presets
+The `python -m tinylm.train` entry point. Parses flags, copies the chosen presets
 with `dataclasses.replace`, applies overrides to the copies, and calls `run`.
 
 ```bash
-uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+uv run python -m tinylm.train --config d26 --tokenizer tokenizer/tokenizer.json
 ```
 
 | Flag | Type | Effect |
@@ -185,7 +185,7 @@ uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
 
 Two details:
 
-- **`--config` defaults to `smoke`**, not `d26`. Running `python -m tinyllm.train`
+- **`--config` defaults to `smoke`**, not `d26`. Running `python -m tinylm.train`
   bare trains the 13M model.
 - **Overrides never mutate module-level presets.** Repeated calls in one process
   start from clean defaults.
@@ -194,15 +194,15 @@ Two details:
 
 ```bash
 # resume after a preemption
-uv run python -m tinyllm.train --config d26 \
+uv run python -m tinylm.train --config d26 \
     --tokenizer tokenizer/tokenizer.json --resume
 
 # 8 GPUs: identical math, ~1/8 the wall clock
-uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
+uv run torchrun --standalone --nproc_per_node=8 -m tinylm.train \
     --config d26 --tokenizer tokenizer/tokenizer.json
 
 # short CPU probe
-uv run python -m tinyllm.train --config smoke --device cpu --steps 20
+uv run python -m tinylm.train --config smoke --device cpu --steps 20
 ```
 
 ## Outputs

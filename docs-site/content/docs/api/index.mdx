@@ -1,9 +1,9 @@
 ---
 title: API reference
-description: The module map; every public class and function in tinyllm, with exact signatures, and where each one is explained
+description: The module map; every public class and function in tinylm, with exact signatures, and where each one is explained
 ---
 
-`tinyllm` is **nine source files totalling 1,364 lines**, with no framework and no
+`tinylm` is **nine source files totalling 1,364 lines**, with no framework and no
 inheritance hierarchy. Every public symbol is listed here with its exact signature
 from source. The conceptual pages explain *why* each piece is the way it is; these
 pages are the lookup.
@@ -13,13 +13,13 @@ pages are the lookup.
 | Module | Lines | What it owns | Public API |
 |---|---|---|---|
 | [`config.py`](/docs/api/config) | 132 | Model and training hyperparameters, presets | `ModelConfig`, `TrainConfig`, `MODEL_PRESETS`, `TRAIN_PRESETS` |
-| [`model.py`](/docs/api/model) | 276 | The transformer, RoPE, KV cache, generation | `RMSNorm`, `precompute_rope`, `apply_rope`, `KVCache`, `Attention`, `SwiGLU`, `Block`, `TinyLLM` |
+| [`model.py`](/docs/api/model) | 276 | The transformer, RoPE, KV cache, generation | `RMSNorm`, `precompute_rope`, `apply_rope`, `KVCache`, `Attention`, `SwiGLU`, `Block`, `TinyLM` |
 | [`tokenizer.py`](/docs/api/tokenizer) | 253 | Byte-level BPE: training, encode/decode, fast export | `BPETokenizer`, `SPLIT_PATTERN`, `ENDOFTEXT` |
 | [`data.py`](/docs/api/data) | 126 | uint16 token shards and memmapped sampling | `ShardWriter`, `TokenShards`, `INDEX_NAME` |
 | [`muon.py`](/docs/api/muon) | 92 | The Muon optimizer and the parameter split | `zeropower_via_newtonschulz5`, `Muon`, `build_optimizers` |
 | [`train.py`](/docs/api/train) | 360 | The pretraining loop, WSD schedule, DDP, checkpoints, MFU | `lr_scale`, `run`, `main`, `PEAK_FLOPS` |
-| [`sample.py`](/docs/api/sample-and-eval#tinyllmsample) | 49 | Loading a checkpoint and generating text | `load_model`, `main` |
-| [`eval_hellaswag.py`](/docs/api/sample-and-eval#tinyllmeval_hellaswag) | 68 | HellaSwag continuation-likelihood eval | `ending_losses`, `main` |
+| [`sample.py`](/docs/api/sample-and-eval#tinylmsample) | 49 | Loading a checkpoint and generating text | `load_model`, `main` |
+| [`eval_hellaswag.py`](/docs/api/sample-and-eval#tinylmeval_hellaswag) | 68 | HellaSwag continuation-likelihood eval | `ending_losses`, `main` |
 
 Two helper scripts sit outside the package:
 
@@ -30,20 +30,20 @@ Two helper scripts sit outside the package:
 
 ## Package exports
 
-`tinyllm/__init__.py` re-exports the six symbols you need for anything ordinary:
+`tinylm/__init__.py` re-exports the six symbols you need for anything ordinary:
 
 ```python
 from .config import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
-from .model import TinyLLM
+from .model import TinyLM
 from .tokenizer import BPETokenizer
 
 __all__ = [
     "MODEL_PRESETS", "TRAIN_PRESETS", "ModelConfig", "TrainConfig",
-    "TinyLLM", "BPETokenizer",
+    "TinyLM", "BPETokenizer",
 ]
 ```
 
-Everything else is imported from its module directly (`from tinyllm.data import
+Everything else is imported from its module directly (`from tinylm.data import
 TokenShards`).
 
 ## Command-line entry points
@@ -58,18 +58,18 @@ uv run python scripts/train_tokenizer.py --max-bytes 250000000
 uv run python scripts/prepare_data.py --data-dir data/fineweb-edu
 
 # 3. pretrain
-uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+uv run python -m tinylm.train --config d26 --tokenizer tokenizer/tokenizer.json
 
 # 3b. pretrain on 8 GPUs: same run, same math
-uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train \
+uv run torchrun --standalone --nproc_per_node=8 -m tinylm.train \
     --config d26 --tokenizer tokenizer/tokenizer.json
 
 # 4. generate
-uv run python -m tinyllm.sample --ckpt out/d26/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/d26/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --prompt "The"
 
 # 5. evaluate
-uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
+uv run python -m tinylm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --limit 1000
 ```
 
@@ -78,8 +78,8 @@ uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt \
 Training a model from scratch, end to end, using only the public API:
 
 ```python
-from tinyllm import MODEL_PRESETS, TRAIN_PRESETS
-from tinyllm.train import run
+from tinylm import MODEL_PRESETS, TRAIN_PRESETS
+from tinylm.train import run
 
 mc = MODEL_PRESETS["smoke"]
 tc = TRAIN_PRESETS["smoke"]
@@ -94,8 +94,8 @@ Loading it back and generating:
 ```python
 import torch
 
-from tinyllm import BPETokenizer
-from tinyllm.sample import load_model
+from tinylm import BPETokenizer
+from tinylm.sample import load_model
 
 model, cfg = load_model("out/smoke/ckpt_last.pt", "cpu")
 tok = BPETokenizer.load("tokenizer/tokenizer.json")

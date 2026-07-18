@@ -4,7 +4,7 @@ description: The prefill/decode contract, KV-cache memory math for d26, and how 
 ---
 
 Generation is where the model stops being a function of a whole sequence and
-becomes a loop. `TinyLLM.generate` in `tinyllm/model.py` is that loop: allocate a
+becomes a loop. `TinyLM.generate` in `tinylm/model.py` is that loop: allocate a
 cache, run the prompt through once, then emit one token at a time until the
 budget or an end-of-text token stops it. This page covers the contract that loop
 obeys, what the cache costs in bytes, and how the three sampling knobs compose.
@@ -152,7 +152,7 @@ everything up to `pos + t`: no copy, no concatenation, no growth. Note the keys
 are cached **after** RoPE and QK-norm, in their final rotated form; a key's
 rotation depends only on its own absolute position, so it is valid forever.
 
-`advance` is called once per forward by `TinyLLM.forward`, after every block has
+`advance` is called once per forward by `TinyLM.forward`, after every block has
 written, not once per layer, since all 26 layers share one position counter:
 
 ```python
@@ -242,24 +242,24 @@ cache means 5× less traffic per token, on the exact critical path.
 ### A note on dtype
 
 The formula's last factor is `self.embed.weight.dtype`, not an assumption. **The
-52 MiB figure is the bf16 number**, and `tinyllm.sample` does not give you bf16:
+52 MiB figure is the bf16 number**, and `tinylm.sample` does not give you bf16:
 
 ```python
-def load_model(ckpt_path: str, device: str) -> tuple[TinyLLM, ModelConfig]:
+def load_model(ckpt_path: str, device: str) -> tuple[TinyLM, ModelConfig]:
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     cfg = ModelConfig(**ckpt["model_cfg"])
-    model = TinyLLM(cfg).to(device)
+    model = TinyLM(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, cfg
 ```
 
-`TinyLLM(cfg)` constructs in PyTorch's default fp32 and the checkpoint's fp32
+`TinyLM(cfg)` constructs in PyTorch's default fp32 and the checkpoint's fp32
 master weights load straight into it. So sampling from a checkpoint as shipped
 runs the model **and its cache** in fp32: **104 MiB at full context, not 52**,
 and 1.82 GiB of weights rather than 933 MiB. That is fine for the interactive,
 batch-1 use
-`tinyllm.sample` is for. If you are serving, cast the model (`model.bfloat16()`)
+`tinylm.sample` is for. If you are serving, cast the model (`model.bfloat16()`)
 after loading and the cache follows automatically, because its dtype is read off
 the embedding rather than hardcoded.
 
@@ -302,7 +302,7 @@ Dividing the logits before the softmax rescales the distribution's sharpness:
 - **`temperature > 1`**: logits compress toward each other, the distribution
   flattens, unlikely tokens get real mass. More diverse, more incoherent.
 
-The default in `tinyllm.sample` is **0.8**, mildly sharpened, the usual choice
+The default in `tinylm.sample` is **0.8**, mildly sharpened, the usual choice
 for a base model, where the raw distribution is diffuse enough that `1.0` wanders.
 
 A consequence of the ordering worth knowing: because dividing by a positive
@@ -371,7 +371,7 @@ computed in sorted order and `multinomial` needs vocab-indexed input.
 **Top-p runs after top-k**, on already-truncated logits, so its softmax is over
 the surviving `k` and its nucleus is a subset of them. Passing both means "at most
 `k`, and within that, the `p`-nucleus": the intersection, and the stricter of the
-two wins. `tinyllm.sample` defaults `top_p` to `None` (off), `top_k` to 50.
+two wins. `tinylm.sample` defaults `top_p` to `None` (off), `top_k` to 50.
 
 ### The draw, and stopping
 
@@ -399,7 +399,7 @@ Slice off the prompt if you only want the continuation.
 ## The CLI
 
 ```bash
-uv run python -m tinyllm.sample \
+uv run python -m tinylm.sample \
     --ckpt out/smoke/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json \
     --prompt "The" \

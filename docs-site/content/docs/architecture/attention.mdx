@@ -240,7 +240,7 @@ the second half of the input and asserts the first half's output is bit-identica
 def test_attention_is_causal():
     torch.manual_seed(0)
     cfg = _small_cfg()
-    from tinyllm.model import precompute_rope
+    from tinylm.model import precompute_rope
 
     attn = Attention(cfg, layer_idx=0).eval()
     cos, sin = precompute_rope(cfg.head_dim, cfg.seq_len, cfg.rope_theta)
@@ -322,7 +322,7 @@ The whole thing is **one preallocated tensor per layer**, `(n_layer, B,
 n_kv_head, max_seq_len, head_dim)`, allocated once up front. No per-step
 `torch.cat`, no reallocation, no growing buffer. `update` writes the new keys
 into the slice at `pos` and returns a **view** of everything up to `pos + t`.
-`advance` bumps the position, called once per forward by `TinyLLM.forward` after
+`advance` bumps the position, called once per forward by `TinyLM.forward` after
 all layers have written, not per layer, since all 26 layers share one position
 counter.
 
@@ -359,7 +359,7 @@ def test_kv_cache_matches_full_forward():
     """Prefill+decode through the cache must equal one full no-cache pass."""
     torch.manual_seed(0)
     cfg = _small_cfg()
-    from tinyllm.model import precompute_rope
+    from tinylm.model import precompute_rope
 
     attn = Attention(cfg, layer_idx=0).eval()
     cos, sin = precompute_rope(cfg.head_dim, cfg.seq_len, cfg.rope_theta)

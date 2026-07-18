@@ -1,9 +1,9 @@
 ---
-title: tinyllm.config
+title: tinylm.config
 description: ModelConfig, TrainConfig, and the d26/smoke presets; every field, default, and unit
 ---
 
-Two frozen-in-shape dataclasses and two preset dictionaries. `tinyllm/config.py`
+Two frozen-in-shape dataclasses and two preset dictionaries. `tinylm/config.py`
 is 132 lines and holds every tunable number in the project; nothing is
 hardcoded downstream.
 
@@ -73,7 +73,7 @@ def head_dim(self) -> int:
 Derived, not stored, so it cannot drift out of sync with the fields it comes from.
 
 ```python
-from tinyllm import ModelConfig
+from tinylm import ModelConfig
 
 cfg = ModelConfig()
 assert cfg.head_dim == 64
@@ -250,7 +250,7 @@ same schedule shape, and the same precision policy as the real run.
 ```python
 from dataclasses import replace
 
-from tinyllm import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
+from tinylm import MODEL_PRESETS, TRAIN_PRESETS, ModelConfig, TrainConfig
 
 mc = MODEL_PRESETS["d26"]
 print(mc.n_layer, mc.head_dim)          # 26 64

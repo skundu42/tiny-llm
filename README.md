@@ -1,10 +1,10 @@
-# tiny-llm
+# tiny-lm
 
 A ~500M-parameter decoder-only language model, pretrained entirely from scratch in Python/PyTorch. The transformer, the byte-level BPE tokenizer, the data pipeline, the Muon+AdamW optimizer, and the training loop are all implemented in this repo, with no `transformers` and no pre-built model components. Development and correctness verification happen locally on Apple Silicon (CPU/MPS); the real pretraining run targets a rented cloud GPU.
 
 ## Architecture
 
-`tinyllm/model.py` implements every layer from scratch: RMSNorm pre-norm, RoPE, grouped-query attention with QK-norm, SwiGLU, tied embeddings, no biases anywhere. Two presets ship in `tinyllm/config.py`:
+`tinylm/model.py` implements every layer from scratch: RMSNorm pre-norm, RoPE, grouped-query attention with QK-norm, SwiGLU, tied embeddings, no biases anywhere. Two presets ship in `tinylm/config.py`:
 
 | Hyperparameter | `d26` (target) | `smoke` (local dev) |
 |---|---|---|
@@ -37,14 +37,14 @@ To exercise the full training loop end-to-end on a laptop, use the `smoke` confi
 ```bash
 uv run python scripts/prepare_data.py --data-dir data/smoke \
     --max-tokens 60000000 --val-tokens 2000000 --shard-tokens 25000000
-uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json
+uv run python -m tinylm.train --config smoke --tokenizer tokenizer/tokenizer.json
 ```
 
 (`prepare_data.py` needs a trained tokenizer first; see below.)
 
 ## Tokenizer training
 
-`scripts/train_tokenizer.py` streams `HuggingFaceFW/fineweb-edu` (`sample-10BT`) text via `datasets`, trains our from-scratch byte-level BPE (`tinyllm.tokenizer.BPETokenizer`) to a 32,768 vocab, saves it, and reports bytes/token compression on 100 held-out documents:
+`scripts/train_tokenizer.py` streams `HuggingFaceFW/fineweb-edu` (`sample-10BT`) text via `datasets`, trains our from-scratch byte-level BPE (`tinylm.tokenizer.BPETokenizer`) to a 32,768 vocab, saves it, and reports bytes/token compression on 100 held-out documents:
 
 ```bash
 uv run python scripts/train_tokenizer.py \
@@ -59,7 +59,7 @@ Every flag has a sane default (see `--help`); this is the one that produces the 
 
 ## Data preparation
 
-`scripts/prepare_data.py` streams the same FineWeb-Edu subset, encodes it with the trained tokenizer, and writes uint16 token shards (`tinyllm.data.ShardWriter`) plus a JSON index: validation shard(s) filled first, then train shards, with `tok.eot_id` appended after every document:
+`scripts/prepare_data.py` streams the same FineWeb-Edu subset, encodes it with the trained tokenizer, and writes uint16 token shards (`tinylm.data.ShardWriter`) plus a JSON index: validation shard(s) filled first, then train shards, with `tok.eot_id` appended after every document:
 
 ```bash
 uv run python scripts/prepare_data.py \
@@ -82,8 +82,8 @@ Training a model for the first time? The docs site has a from-zero walkthrough (
 2. `uv run pytest -q`: confirm the suite is green.
 3. Train a tokenizer on a small byte budget (a few minutes): `uv run python scripts/train_tokenizer.py --max-bytes 20_000_000`.
 4. Prepare a small shard set: `uv run python scripts/prepare_data.py --data-dir data/smoke --max-tokens 60000000 --val-tokens 2000000 --shard-tokens 25000000`.
-5. Train: `uv run python -m tinyllm.train --config smoke --tokenizer tokenizer/tokenizer.json`; logs to `out/smoke/log.csv`, checkpoints to `out/smoke/ckpt_last.pt`, periodic sample generations printed to stdout.
-6. Sample from the checkpoint: `uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"`.
+5. Train: `uv run python -m tinylm.train --config smoke --tokenizer tokenizer/tokenizer.json`; logs to `out/smoke/log.csv`, checkpoints to `out/smoke/ckpt_last.pt`, periodic sample generations printed to stdout.
+6. Sample from the checkpoint: `uv run python -m tinylm.sample --ckpt out/smoke/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"`.
 
 This whole loop runs on CPU or Apple Silicon MPS and needs no GPU: `torch.compile` is automatically disabled off-CUDA (no `--no-compile` flag needed), and precision falls back to fp32 when `--dtype` is left at its `auto` default.
 
@@ -93,7 +93,7 @@ The smoke run above is deliberately undertrained (~0.75 tokens per parameter). T
 
 ```bash
 uv run python scripts/prepare_data.py --data-dir data/fineweb-275m --max-tokens 275000000
-caffeinate -is uv run python -m tinyllm.train --config smoke \
+caffeinate -is uv run python -m tinylm.train --config smoke \
     --tokenizer tokenizer/tokenizer.json \
     --data-dir data/fineweb-275m --out-dir out/smoke-full --steps 16000
 ```
@@ -127,18 +127,18 @@ Steps on a fresh Ubuntu GPU box (Lambda Labs, RunPod, etc.):
 5. Launch training inside `tmux` so it survives a dropped SSH connection:
    ```bash
    tmux new -s train
-   uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+   uv run python -m tinylm.train --config d26 --tokenizer tokenizer/tokenizer.json
    # or, on an 8-GPU box:
-   uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+   uv run torchrun --standalone --nproc_per_node=8 -m tinylm.train --config d26 --tokenizer tokenizer/tokenizer.json
    ```
    Detach with `Ctrl-b d`; reattach any time with `tmux attach -t train`.
 6. If the box dies or the session is interrupted, resume from the last atomic checkpoint (bit-exact):
    ```bash
-   uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json --resume
+   uv run python -m tinylm.train --config d26 --tokenizer tokenizer/tokenizer.json --resume
    ```
 7. Monitor progress via `out/d26/log.csv` (or Weights & Biases, if `--wandb <project>` was passed): step, train/val loss, LR scale, tokens/sec, and MFU (populated on CUDA against a recognized GPU).
 8. Once trained, evaluate and sample from the final checkpoint:
    ```bash
-   uv run python -m tinyllm.eval_hellaswag --ckpt out/d26/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --limit 1000
-   uv run python -m tinyllm.sample --ckpt out/d26/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"
+   uv run python -m tinylm.eval_hellaswag --ckpt out/d26/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --limit 1000
+   uv run python -m tinylm.sample --ckpt out/d26/ckpt_last.pt --tokenizer tokenizer/tokenizer.json --prompt "Once upon a time"
    ```

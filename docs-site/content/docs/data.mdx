@@ -5,7 +5,7 @@ description: FineWeb-Edu, uint16 token shards, memmapped random-crop sampling, a
 
 Once text is tokenized it becomes a river of integers, and the training loop
 needs to drink from that river efficiently, reproducibly, and without loading it
-all into memory. `tinyllm`'s data path (`tinyllm/data.py` plus
+all into memory. `tinylm`'s data path (`tinylm/data.py` plus
 `scripts/prepare_data.py`) is three ideas: a compact on-disk **shard format**, a
 **memory-mapped random-crop sampler**, and a **stateless RNG** that turns
 "resume training exactly where it left off" from a hard problem into a non-issue.

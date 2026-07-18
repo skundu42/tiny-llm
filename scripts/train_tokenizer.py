@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasets import load_dataset
 
-from tinyllm.tokenizer import BPETokenizer
+from tinylm.tokenizer import BPETokenizer
 
 
 def main() -> None:

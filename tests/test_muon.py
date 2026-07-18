@@ -1,8 +1,8 @@
 import torch
 
-from tinyllm.config import ModelConfig, TrainConfig
-from tinyllm.model import TinyLLM
-from tinyllm.muon import Muon, build_optimizers, zeropower_via_newtonschulz5
+from tinylm.config import ModelConfig, TrainConfig
+from tinylm.model import TinyLM
+from tinylm.muon import Muon, build_optimizers, zeropower_via_newtonschulz5
 
 
 def test_newton_schulz_orthogonalizes():
@@ -47,7 +47,7 @@ def test_muon_converges_on_regression():
 def test_build_optimizers_split():
     cfg = ModelConfig(vocab_size=256, n_layer=2, n_head=4, n_kv_head=2,
                       d_model=64, d_ff=128, seq_len=32)
-    model = TinyLLM(cfg)
+    model = TinyLM(cfg)
     muon, adamw = build_optimizers(model, TrainConfig())
     n_muon = sum(len(g["params"]) for g in muon.param_groups)
     assert n_muon == cfg.n_layer * 7  # wq wk wv wo gate up down per layer

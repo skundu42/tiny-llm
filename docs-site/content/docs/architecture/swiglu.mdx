@@ -5,7 +5,7 @@ description: The gated MLP. What the gate does, why SiLU, and where d_ff = 3456 
 
 The MLP is where **77% of every block's parameters** live: 13,271,040 of
 17,205,888. Attention moves information between positions; the MLP is what
-actually processes it, position by position. `tinyllm` uses SwiGLU (Shazeer,
+actually processes it, position by position. `tinylm` uses SwiGLU (Shazeer,
 2020), the gated variant that every recent open model has converged on.
 
 ```python

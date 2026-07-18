@@ -3,7 +3,7 @@ title: Architecture
 description: The full forward pass end to end, both config presets, and the exact parameter budget down to the last norm gain
 ---
 
-`tinyllm/model.py` is one file, about 220 lines, and it contains the entire
+`tinylm/model.py` is one file, about 220 lines, and it contains the entire
 model: RMSNorm pre-norm, RoPE, grouped-query attention with QK-norm, SwiGLU,
 tied embeddings, and **no biases anywhere**. This page walks the forward pass
 from token IDs to logits and accounts for every one of the 489,297,408
@@ -16,7 +16,7 @@ understood rather than imported.
 
 ## The two presets
 
-`tinyllm/config.py` ships exactly two model configs. `d26` is the real target;
+`tinylm/config.py` ships exactly two model configs. `d26` is the real target;
 `smoke` is a shrunken version used for local development that exercises the
 identical code path.
 
@@ -161,11 +161,11 @@ The four sub-modules per block, in order of execution:
 
 ```python
 def test_param_counts_exact():
-    from tinyllm.config import MODEL_PRESETS
+    from tinylm.config import MODEL_PRESETS
 
     with torch.device("meta"):
-        d26 = TinyLLM(MODEL_PRESETS["d26"])
-        smoke = TinyLLM(MODEL_PRESETS["smoke"])
+        d26 = TinyLM(MODEL_PRESETS["d26"])
+        smoke = TinyLM(MODEL_PRESETS["smoke"])
     assert d26.num_params() == 489_297_408
     assert smoke.num_params() == 13_111_296
 ```

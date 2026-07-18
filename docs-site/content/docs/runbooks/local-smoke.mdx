@@ -12,7 +12,7 @@ tooling; if this is your first time training anything, follow
 [Your first training run](/docs/runbooks/first-run), which walks the same
 sequence with every step explained.
 
-The `smoke` preset is not a toy reimplementation. It is the same `tinyllm.train`
+The `smoke` preset is not a toy reimplementation. It is the same `tinylm.train`
 entry point, the same [Muon+AdamW split](/docs/training/muon), the same
 [WSD schedule](/docs/training), the same [data pipeline](/docs/data) and the
 same [model code](/docs/architecture) as the 489M `d26` run; only the config
@@ -28,8 +28,8 @@ differs. If this passes, the pipeline is wired correctly and the only thing
 ## Step 0: Install
 
 ```bash
-git clone <repo-url> tiny-llm
-cd tiny-llm
+git clone <repo-url> tiny-lm
+cd tiny-lm
 uv sync
 ```
 
@@ -96,7 +96,7 @@ stays tractable in pure Python.
 
 ```bash
 uv run python -c "
-from tinyllm.tokenizer import BPETokenizer
+from tinylm.tokenizer import BPETokenizer
 t = BPETokenizer.load('tokenizer/tokenizer.json')
 assert t.vocab_size == 32768 and t.eot_id == 32767
 s = 'The history of science shows that 42 ideas can change everything.'
@@ -185,7 +185,7 @@ Disk cost is ~120 MB (60M tokens × 2 bytes for uint16).
 ## Step 5: Train
 
 ```bash
-uv run python -m tinyllm.train --config smoke --device mps \
+uv run python -m tinylm.train --config smoke --device mps \
     --tokenizer tokenizer/tokenizer.json
 ```
 
@@ -267,7 +267,7 @@ doing its job.
 ## Step 6: Verify resume
 
 ```bash
-uv run python -m tinyllm.train --config smoke --device mps \
+uv run python -m tinylm.train --config smoke --device mps \
     --tokenizer tokenizer/tokenizer.json --steps 620 --resume
 ```
 
@@ -296,7 +296,7 @@ bit-exactness story.
 ## Step 7: Sample
 
 ```bash
-uv run python -m tinyllm.sample --ckpt out/smoke/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/smoke/ckpt_last.pt \
     --tokenizer tokenizer/tokenizer.json --prompt "The" --max-new-tokens 60
 ```
 
@@ -311,7 +311,7 @@ These are the real recorded outputs.
 > A. The following you
 > - It's important to do that this is the same. When it's an example of what you are going to a different way.
 
-**At step 600** via `tinyllm.sample`, prompt `"The"` (seed 1):
+**At step 600** via `tinylm.sample`, prompt `"The"` (seed 1):
 
 > The 'the last in the first years of the past was the most common in the world. The best way to be the most diverse and highly difficult, while there was a lot of the most important for future lives. In a very high level of work, the world's most important is the same as
 

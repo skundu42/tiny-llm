@@ -3,11 +3,11 @@ title: Muon
 description: Momentum orthogonalized by Newton-Schulz; the derivation, the quintic iteration, and the hidden/embed/norm parameter split
 ---
 
-Most of `tinyllm`'s parameters are not optimized by Adam. The hidden weight
+Most of `tinylm`'s parameters are not optimized by Adam. The hidden weight
 matrices (every attention and MLP projection) are trained with **Muon**
 (MomentUm Orthogonalized by Newton-schulz; Jordan et al., 2024), while only the
 embedding and the norm gains fall back to AdamW. This page derives Muon from the
-idea down to the code in `tinyllm/muon.py`, then explains exactly which
+idea down to the code in `tinylm/muon.py`, then explains exactly which
 parameters go where and why.
 
 ## The core idea: orthogonalize the update

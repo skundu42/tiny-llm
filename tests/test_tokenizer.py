@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from tinyllm.tokenizer import ENDOFTEXT, BPETokenizer
+from tinylm.tokenizer import ENDOFTEXT, BPETokenizer
 
 CORPUS = [
     "The quick brown fox jumps over the lazy dog. " * 20,

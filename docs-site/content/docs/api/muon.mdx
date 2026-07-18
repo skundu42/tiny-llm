@@ -1,9 +1,9 @@
 ---
-title: tinyllm.muon
+title: tinylm.muon
 description: zeropower_via_newtonschulz5, the Muon optimizer, and build_optimizers; exact signatures and the three-bucket parameter split
 ---
 
-92 lines: `tinyllm/muon.py`. An optimizer that orthogonalizes each 2-D weight's
+92 lines: `tinylm/muon.py`. An optimizer that orthogonalizes each 2-D weight's
 momentum-smoothed gradient with a quintic Newton-Schulz iteration, plus the
 function that decides which parameters get it. [Muon](/docs/training/muon) derives
 the method; this page is the signature reference.
@@ -36,7 +36,7 @@ knowing as a caller:
 ```python
 import torch
 
-from tinyllm.muon import zeropower_via_newtonschulz5
+from tinylm.muon import zeropower_via_newtonschulz5
 
 G = torch.randn(64, 128)
 X = zeropower_via_newtonschulz5(G)
@@ -106,7 +106,7 @@ Note `step` does **not** zero gradients; the training loop calls
   discarding the buffer rather than reusing it. **It would break under DDP's
   `gradient_as_bucket_view=True`**, which aliases `p.grad` to a communication
   bucket; mutating it in place would corrupt the bucket instead of just the
-  local gradient. `tinyllm`'s DDP wrapper does not set that flag.
+  local gradient. `tinylm`'s DDP wrapper does not set that flag.
 </Callout>
 
 ## `build_optimizers`
@@ -161,10 +161,10 @@ and AdamW's `6e-4` ride the same curve off their own bases. **A hand-built
 optimizer without `initial_lr` will `KeyError` on the first step of `run`.**
 
 ```python
-from tinyllm import MODEL_PRESETS, TRAIN_PRESETS, TinyLLM
-from tinyllm.muon import build_optimizers
+from tinylm import MODEL_PRESETS, TRAIN_PRESETS, TinyLM
+from tinylm.muon import build_optimizers
 
-model = TinyLLM(MODEL_PRESETS["d26"])
+model = TinyLM(MODEL_PRESETS["d26"])
 muon, adamw = build_optimizers(model, TRAIN_PRESETS["d26"])
 
 n_muon = sum(p.numel() for g in muon.param_groups for p in g["params"])

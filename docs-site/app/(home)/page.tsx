@@ -25,73 +25,73 @@ const COMPONENTS = [
     name: 'RMSNorm',
     detail: 'Pre-norm, fp32 compute cast back',
     href: '/docs/architecture/rmsnorm',
-    file: 'tinyllm/model.py',
+    file: 'tinylm/model.py',
   },
   {
     name: 'RoPE',
     detail: 'Rotary positions, NeoX half-split, precomputed tables',
     href: '/docs/architecture/rope',
-    file: 'tinyllm/model.py',
+    file: 'tinylm/model.py',
   },
   {
     name: 'Attention',
     detail: 'Grouped-query (20 Q / 4 KV heads) with QK-norm, causal SDPA',
     href: '/docs/architecture/attention',
-    file: 'tinyllm/model.py',
+    file: 'tinylm/model.py',
   },
   {
     name: 'SwiGLU',
     detail: 'Gated MLP, d_ff 3456, no biases anywhere',
     href: '/docs/architecture/swiglu',
-    file: 'tinyllm/model.py',
+    file: 'tinylm/model.py',
   },
   {
     name: 'Embeddings & init',
     detail: 'Tied input/output, 1/√(2L) residual scaling',
     href: '/docs/architecture/embeddings-and-init',
-    file: 'tinyllm/model.py',
+    file: 'tinylm/model.py',
   },
   {
     name: 'Tokenizer',
     detail: 'Byte-level BPE trained on 250 MB of FineWeb-Edu',
     href: '/docs/tokenizer',
-    file: 'tinyllm/tokenizer.py',
+    file: 'tinylm/tokenizer.py',
   },
   {
     name: 'Data pipeline',
     detail: 'uint16 shards, memmapped random-crop sampler',
     href: '/docs/data',
-    file: 'tinyllm/data.py',
+    file: 'tinylm/data.py',
   },
   {
     name: 'Training loop',
     detail: 'Grad accumulation, bf16 autocast, WSD schedule',
     href: '/docs/training',
-    file: 'tinyllm/train.py',
+    file: 'tinylm/train.py',
   },
   {
     name: 'Muon',
     detail: 'Newton-Schulz orthogonalized momentum',
     href: '/docs/training/muon',
-    file: 'tinyllm/muon.py',
+    file: 'tinylm/muon.py',
   },
   {
     name: 'Distributed',
     detail: 'Plain DDP via torchrun, no_sync accumulation',
     href: '/docs/training/distributed',
-    file: 'tinyllm/train.py',
+    file: 'tinylm/train.py',
   },
   {
     name: 'Checkpointing',
     detail: 'Atomic writes, bit-exact resume',
     href: '/docs/training/checkpointing',
-    file: 'tinyllm/train.py',
+    file: 'tinylm/train.py',
   },
   {
     name: 'Evaluation',
     detail: 'HellaSwag harness on the pretrained checkpoint',
     href: '/docs/evaluation',
-    file: 'tinyllm/eval_hellaswag.py',
+    file: 'tinylm/eval_hellaswag.py',
   },
 ];
 
@@ -110,7 +110,7 @@ export default function HomePage() {
               parameters. No pre-built components.
             </h1>
             <p className="mt-6 max-w-prose text-fd-muted-foreground">
-              tiny-llm is a decoder-only transformer pretrained on ~10B tokens
+              tiny-lm is a decoder-only transformer pretrained on ~10B tokens
               of FineWeb-Edu. The model, the byte-level BPE tokenizer, the data
               pipeline, the Muon + AdamW optimizer, and the training loop are
               all written from scratch in PyTorch;{' '}
@@ -137,9 +137,9 @@ export default function HomePage() {
           {/* The config that defines the model, verbatim from the repo */}
           <figure className="overflow-hidden rounded-lg border border-fd-border bg-fd-card">
             <figcaption className="flex items-center justify-between border-b border-fd-border px-4 py-2.5 font-mono text-xs text-fd-muted-foreground">
-              tinyllm/config.py
+              tinylm/config.py
               <a
-                href={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/tinyllm/config.py`}
+                href={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/tinylm/config.py`}
                 className="underline underline-offset-4 hover:text-fd-foreground"
               >
                 view source

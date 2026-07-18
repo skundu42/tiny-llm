@@ -3,7 +3,7 @@ title: The training loop
 description: Grad-accumulation math, bf16 autocast, gradient clipping, the WSD schedule, and throughput expectations
 ---
 
-The pretraining loop lives in `tinyllm/train.py`. Stripped to its spine it is
+The pretraining loop lives in `tinylm/train.py`. Stripped to its spine it is
 the loop every language model is trained by (sample a batch, forward, backward,
 step, repeat), but the details around that spine are what make it converge
 efficiently, run on one GPU or many without changing the math, and resume bit

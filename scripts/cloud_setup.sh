@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap a fresh Ubuntu GPU box (e.g. Lambda/RunPod H100) for tiny-llm.
+# Bootstrap a fresh Ubuntu GPU box (e.g. Lambda/RunPod H100) for tiny-lm.
 set -euo pipefail
 
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -14,7 +14,7 @@ fi
 cat <<'EOF'
 uv run python scripts/prepare_data.py                        # ~1-3 h CPU, ~20 GB disk
 tmux new -s train
-uv run python -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+uv run python -m tinylm.train --config d26 --tokenizer tokenizer/tokenizer.json
 # multi-GPU instead:
-# uv run torchrun --standalone --nproc_per_node=8 -m tinyllm.train --config d26 --tokenizer tokenizer/tokenizer.json
+# uv run torchrun --standalone --nproc_per_node=8 -m tinylm.train --config d26 --tokenizer tokenizer/tokenizer.json
 EOF

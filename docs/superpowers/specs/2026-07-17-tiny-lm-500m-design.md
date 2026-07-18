@@ -1,4 +1,4 @@
-# tiny-llm: a ~500M-parameter LLM pretrained from scratch
+# tiny-lm: a ~500M-parameter LLM pretrained from scratch
 
 **Date:** 2026-07-17
 **Status:** Approved (design), pending spec review
@@ -77,7 +77,7 @@ A detailed documentation site lives in `docs-site/` (Next.js + Fumadocs, MDX con
 - **Training**: Muon + AdamW hybrid (with Newton-Schulz explanation), WSD schedule, bf16/compile, DDP, checkpointing.
 - **Evaluation & inference**: val loss, HellaSwag, KV-cache generation.
 - **Runbooks**: local smoke train on Apple Silicon; full cloud pretrain (provisioning → data prep → launch → monitoring → cost).
-- **API reference**: per-module reference for `tinyllm/*`.
+- **API reference**: per-module reference for `tinylm/*`.
 
 Verification: `pnpm build` must succeed (static export not required; default Next build), all internal links valid, code snippets in docs lifted from the real source.
 
@@ -90,12 +90,12 @@ Verification: `pnpm build` must succeed (static export not required; default Nex
 ## Repository layout
 
 ```
-tiny-llm/
+tiny-lm/
 ├── pyproject.toml            # uv-managed: torch, numpy, regex, datasets, tqdm, pytest; wandb optional
 ├── README.md                 # quickstart + cloud runbook
-├── tinyllm/
+├── tinylm/
 │   ├── config.py             # ModelConfig/TrainConfig dataclasses + presets (d26, smoke)
-│   ├── model.py              # RMSNorm, RoPE, GQA attention w/ QK-norm, SwiGLU, Block, TinyLLM
+│   ├── model.py              # RMSNorm, RoPE, GQA attention w/ QK-norm, SwiGLU, Block, TinyLM
 │   ├── tokenizer.py          # BPE: train / encode / decode / save / load / fast-export
 │   ├── data.py               # shard writer + memmap loader (DDP-aware)
 │   ├── muon.py               # Muon optimizer + param-group split builder
@@ -154,7 +154,7 @@ review work happened.
   what the code actually does.
 - **Shipped AdamW LR is `6e-4`, not `≈3e-4`.** §"Optimizer & training recipe"
   above says "AdamW LR ≈ 3e-4; exact values tuned on the smoke config." The
-  value that shipped in `tinyllm/config.py`'s `TrainConfig.adamw_lr` (and that
+  value that shipped in `tinylm/config.py`'s `TrainConfig.adamw_lr` (and that
   the smoke run in `docs/superpowers/specs/smoke-results.md` was actually
   measured against) is `6e-4`. The plan's own caveat ("exact values tuned on
   the smoke config") anticipated this drift; this note just records where it
@@ -162,7 +162,7 @@ review work happened.
 - **MFU logging is implemented.** §"Optimizer & training recipe" lists "MFU
   estimate" as a logging requirement; at the time of the smoke run it was not
   yet wired up (`train.py` only shipped a `PEAK_FLOPS` reference constant for
-  computing it offline). It is now computed inline in `tinyllm/train.py`'s
+  computing it offline). It is now computed inline in `tinylm/train.py`'s
   master-rank logging branch (`flops_per_token = 6*N + 12*n_layer*d_model*
   seq_len`, `mfu = flops_per_token * tok_s / peak_flops` where `peak_flops` is
   looked up from `PEAK_FLOPS` by matching `torch.cuda.get_device_name()`) and

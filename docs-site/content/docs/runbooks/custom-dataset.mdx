@@ -93,7 +93,7 @@ Point the trainer at the new shard directory. `--data-dir`, `--out-dir`, and
 `--steps` override the preset's values:
 
 ```bash
-uv run python -m tinyllm.train --config d26 \
+uv run python -m tinylm.train --config d26 \
     --tokenizer tokenizer/c4.json \
     --data-dir data/c4 \
     --out-dir out/c4-d26 \
@@ -115,7 +115,7 @@ budget.
 Sampling and evaluation work unchanged; pass the matching tokenizer:
 
 ```bash
-uv run python -m tinyllm.sample --ckpt out/c4-d26/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/c4-d26/ckpt_last.pt \
     --tokenizer tokenizer/c4.json --prompt "The capital of France"
 ```
 
@@ -139,12 +139,12 @@ uv run python scripts/prepare_data.py \
     --max-tokens 60_000_000 --val-tokens 2_000_000 --shard-tokens 25_000_000
 
 # 3. train the smoke model (~15-30 min on MPS or CPU)
-uv run python -m tinyllm.train --config smoke \
+uv run python -m tinylm.train --config smoke \
     --tokenizer tokenizer/tinystories.json \
     --data-dir data/tinystories --out-dir out/tinystories-smoke
 
 # 4. sample
-uv run python -m tinyllm.sample --ckpt out/tinystories-smoke/ckpt_last.pt \
+uv run python -m tinylm.sample --ckpt out/tinystories-smoke/ckpt_last.pt \
     --tokenizer tokenizer/tinystories.json --prompt "Once upon a time"
 ```
 

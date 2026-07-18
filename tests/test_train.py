@@ -2,10 +2,10 @@ import numpy as np
 import pytest
 import torch
 
-from tinyllm.config import ModelConfig, TrainConfig
-from tinyllm.data import ShardWriter
-from tinyllm.model import TinyLLM
-from tinyllm.train import _distributed_mean, _flops_per_token, lr_scale, run
+from tinylm.config import ModelConfig, TrainConfig
+from tinylm.data import ShardWriter
+from tinylm.model import TinyLM
+from tinylm.train import _distributed_mean, _flops_per_token, lr_scale, run
 
 
 def _micro_cfgs(tmp_path, steps=60):
@@ -104,7 +104,7 @@ def test_distributed_mean_reduces_and_does_not_mutate(monkeypatch):
         assert op == torch.distributed.ReduceOp.SUM
         tensor.add_(4.0)
 
-    monkeypatch.setattr("tinyllm.train.dist.all_reduce", fake_all_reduce)
+    monkeypatch.setattr("tinylm.train.dist.all_reduce", fake_all_reduce)
     result = _distributed_mean(value, world=2)
     assert result.item() == 3.0
     assert value.item() == 2.0
@@ -113,7 +113,7 @@ def test_distributed_mean_reduces_and_does_not_mutate(monkeypatch):
 def test_flops_count_includes_tied_output_projection():
     cfg = ModelConfig(vocab_size=64, n_layer=1, n_head=2, n_kv_head=1,
                       d_model=32, d_ff=64, seq_len=16)
-    model = TinyLLM(cfg)
+    model = TinyLM(cfg)
     expected = 6 * model.num_params() + 12 * cfg.n_layer * cfg.d_model * cfg.seq_len
     assert _flops_per_token(model, cfg) == expected
     assert _flops_per_token(model, cfg) > (

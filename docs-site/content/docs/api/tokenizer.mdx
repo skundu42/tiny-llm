@@ -1,10 +1,10 @@
 ---
-title: tinyllm.tokenizer
+title: tinylm.tokenizer
 description: BPETokenizer; training, encode/decode, persistence, and the verified fast export, with exact signatures
 ---
 
 A byte-level BPE tokenizer written from scratch in 253 lines:
-`tinyllm/tokenizer.py`. No `tokenizers` dependency on the critical path: the HF
+`tinylm/tokenizer.py`. No `tokenizers` dependency on the critical path: the HF
 library appears only in `export_fast`, as an accelerator that must prove itself
 against this implementation before it is trusted. See
 [Tokenizer](/docs/tokenizer) for the design.
@@ -140,7 +140,7 @@ Two properties worth relying on:
   the corpus.
 
 ```python
-from tinyllm import BPETokenizer
+from tinylm import BPETokenizer
 
 tok = BPETokenizer.train(
     ["hello world", "hello there", "world of words"] * 100,
@@ -168,7 +168,7 @@ within each pre-token until none apply. Per-word results are memoized
   **Special tokens are never produced by `encode`.** `"<|endoftext|>"` in the input
   encodes as its literal characters, not as id 32767. This is a security property,
   not an oversight: text from a user cannot inject a document boundary. To emit
-  one, prepend `tok.eot_id` yourself, as [`tinyllm.sample`](/docs/api/sample-and-eval#main)
+  one, prepend `tok.eot_id` yourself, as [`tinylm.sample`](/docs/api/sample-and-eval#main)
   and [`prepare_data`](/docs/api/data#scriptsprepare_datapy) both do.
 </Callout>
 
@@ -187,7 +187,7 @@ a token boundary can split a multi-byte codepoint, so decoding a *partial* strea
 yields ``, never an exception.
 
 ```python
-from tinyllm import BPETokenizer
+from tinylm import BPETokenizer
 
 tok = BPETokenizer.load("tokenizer/tokenizer.json")
 s = "The history of science shows that 42 ideas can change everything."
@@ -277,7 +277,7 @@ import itertools
 
 from datasets import load_dataset
 
-from tinyllm import BPETokenizer
+from tinylm import BPETokenizer
 
 tok = BPETokenizer.load("tokenizer/tokenizer.json")
 ds = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT",

@@ -1,9 +1,9 @@
 ---
-title: tiny-llm
+title: tiny-lm
 description: A 489M-parameter decoder-only transformer pretrained from scratch in PyTorch, with the model, tokenizer, data pipeline, and optimizer all implemented in this repo
 ---
 
-`tiny-llm` is a **489,297,408-parameter** decoder-only language model, pretrained
+`tiny-lm` is a **489,297,408-parameter** decoder-only language model, pretrained
 from scratch on ~10B tokens of FineWeb-Edu. Every piece is implemented in
 Python/PyTorch in this repo: the transformer layers, the byte-level BPE tokenizer, the shard
 format and sampler, the Muon+AdamW optimizer, and the training loop. There is no
@@ -32,17 +32,17 @@ then the real run is launched on a rented GPU box.
 
 | Component | What it is | Where |
 |---|---|---|
-| [RMSNorm](/docs/architecture/rmsnorm) | Pre-norm, fp32 compute cast back | `tinyllm/model.py` |
-| [RoPE](/docs/architecture/rope) | Rotary positions, NeoX half-split, precomputed tables | `tinyllm/model.py` |
-| [Attention](/docs/architecture/attention) | Grouped-query (20 Q / 4 KV heads) + QK-norm, causal SDPA | `tinyllm/model.py` |
-| [SwiGLU](/docs/architecture/swiglu) | Gated MLP, `d_ff` 3456, no biases | `tinyllm/model.py` |
-| [Embeddings & init](/docs/architecture/embeddings-and-init) | Tied input/output, 0.02 init, 1/√(2L) residual scaling | `tinyllm/model.py` |
-| [Tokenizer](/docs/tokenizer) | Byte-level BPE, trained on 250 MB of FineWeb-Edu | `tinyllm/tokenizer.py` |
-| [Data pipeline](/docs/data) | uint16 shards, memmapped random-crop sampler, stateless RNG | `tinyllm/data.py` |
-| [Training loop](/docs/training) | Grad accumulation, bf16 autocast, WSD schedule | `tinyllm/train.py` |
-| [Muon](/docs/training/muon) | Newton-Schulz orthogonalized momentum | `tinyllm/muon.py` |
-| [Distributed](/docs/training/distributed) | Plain DDP via `torchrun`, `no_sync` accumulation | `tinyllm/train.py` |
-| [Checkpointing](/docs/training/checkpointing) | Atomic writes, bit-exact resume | `tinyllm/train.py` |
+| [RMSNorm](/docs/architecture/rmsnorm) | Pre-norm, fp32 compute cast back | `tinylm/model.py` |
+| [RoPE](/docs/architecture/rope) | Rotary positions, NeoX half-split, precomputed tables | `tinylm/model.py` |
+| [Attention](/docs/architecture/attention) | Grouped-query (20 Q / 4 KV heads) + QK-norm, causal SDPA | `tinylm/model.py` |
+| [SwiGLU](/docs/architecture/swiglu) | Gated MLP, `d_ff` 3456, no biases | `tinylm/model.py` |
+| [Embeddings & init](/docs/architecture/embeddings-and-init) | Tied input/output, 0.02 init, 1/√(2L) residual scaling | `tinylm/model.py` |
+| [Tokenizer](/docs/tokenizer) | Byte-level BPE, trained on 250 MB of FineWeb-Edu | `tinylm/tokenizer.py` |
+| [Data pipeline](/docs/data) | uint16 shards, memmapped random-crop sampler, stateless RNG | `tinylm/data.py` |
+| [Training loop](/docs/training) | Grad accumulation, bf16 autocast, WSD schedule | `tinylm/train.py` |
+| [Muon](/docs/training/muon) | Newton-Schulz orthogonalized momentum | `tinylm/muon.py` |
+| [Distributed](/docs/training/distributed) | Plain DDP via `torchrun`, `no_sync` accumulation | `tinylm/train.py` |
+| [Checkpointing](/docs/training/checkpointing) | Atomic writes, bit-exact resume | `tinylm/train.py` |
 
 ## Where to start
 

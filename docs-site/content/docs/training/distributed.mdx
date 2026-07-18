@@ -3,7 +3,7 @@ title: Distributed training
 description: DDP mechanics, no_sync during accumulation, torchrun from one GPU to many, and why not FSDP at half a billion parameters
 ---
 
-`tinyllm` scales across GPUs with plain **Distributed Data Parallel (DDP)**.
+`tinylm` scales across GPUs with plain **Distributed Data Parallel (DDP)**.
 There is no model sharding, no pipeline splitting: every GPU holds a full copy
 of the model and they cooperate only by averaging gradients. At ~0.5B parameters
 that is exactly the right amount of machinery: simple, fast, and enough. This
@@ -95,14 +95,14 @@ or CPU. For `d26` this means `grad_accum = 32`: the whole 524,288-token batch is
 accumulated on one device.
 
 ```bash
-python -m tinyllm.train --config d26 --data-dir data/fineweb-edu
+python -m tinylm.train --config d26 --data-dir data/fineweb-edu
 ```
 
 **Multiple GPUs on one node:** launch under `torchrun`, which spawns one process
 per GPU and populates `RANK`, `WORLD_SIZE`, and `LOCAL_RANK`:
 
 ```bash
-torchrun --standalone --nproc_per_node=8 -m tinyllm.train --config d26
+torchrun --standalone --nproc_per_node=8 -m tinylm.train --config d26
 ```
 
 Now `world = 8` and `grad_accum` drops to `4`, but `batch_tokens` is still
@@ -138,5 +138,5 @@ indispensable at many billions of parameters. At ~0.5B it is the wrong trade:
 
 The rule of thumb: reach for FSDP when a single replica (weights plus optimizer
 state) no longer fits on one GPU. Until then, replicate-and-all-reduce is the
-faster, simpler choice, and at this scale `tinyllm` stays firmly on the DDP side
+faster, simpler choice, and at this scale `tinylm` stays firmly on the DDP side
 of that line.
